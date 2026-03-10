@@ -1,7 +1,7 @@
 name: random_movie
 description: "随影 - 多人协作选片的随机抽取应用"
 publish_to: 'none'
-version: 0.1.0
+version: 0.1.1
 
 environment:
   sdk: ^3.10.7
