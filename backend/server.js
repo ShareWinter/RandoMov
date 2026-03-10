@@ -80,6 +80,41 @@ app.get('/api/rooms', (req, res) => {
   res.json({ room: toRoomJson(room) });
 });
 
+// Proxy route for WMDB API (bypasses GFW via server-side request)
+app.get('/api/movie', async (req, res) => {
+  const { id } = req.query;
+  if (!id) return res.status(400).json({ error: '缺少 id 参数' });
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    const response = await fetch(
+      `https://api.wmdb.tv/movie/api?id=${id}`,
+      {
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+      },
+    );
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: `WMDB API 返回错误: ${response.status}`,
+      });
+    }
+
+    const data = await response.json();
+    res.json(data);
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      return res.status(504).json({ error: 'WMDB API 请求超时' });
+    }
+    console.error('[Proxy] WMDB API error:', e.message);
+    res.status(502).json({ error: `代理请求失败: ${e.message}` });
+  }
+});
+
 // ==================== Socket.IO ====================
 io.on('connection', (socket) => {
   console.log(`[Socket] Connected: ${socket.id}`);

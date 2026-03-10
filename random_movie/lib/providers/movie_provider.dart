@@ -101,7 +101,9 @@ class MovieProvider extends ChangeNotifier {
   }
 
   /// 仅爬取单个影片预览，不保存到本地
-  Future<Movie?> fetchMoviePreview(String doubanUrl) async {
+  ///
+  /// [useProxy] 为 true 时走服务端代理（绕墙），false 时直连 WMDB API。
+  Future<Movie?> fetchMoviePreview(String doubanUrl, {bool useProxy = true}) async {
     if (doubanUrl.trim().isEmpty) {
       _error = '请输入豆瓣链接';
       notifyListeners();
@@ -113,7 +115,7 @@ class MovieProvider extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final movie = await _scraperService.scrapeMovie(doubanUrl.trim());
+      final movie = await _scraperService.scrapeMovie(doubanUrl.trim(), useProxy: useProxy);
       _isLoading = false;
       notifyListeners();
       return movie;

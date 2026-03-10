@@ -13,18 +13,26 @@ class MovieScraperService {
   ));
 
   /// 爬取单个影片（通过 WMDB API）
-  Future<Movie> scrapeMovie(String doubanUrl) async {
+  ///
+  /// [useProxy] 为 true 时走服务端代理（绕墙），false 时直连 WMDB API。
+  Future<Movie> scrapeMovie(String doubanUrl, {bool useProxy = true}) async {
     try {
-      // 提取 doubanId
-      final match = RegExp(r'subject/(\d+)').firstMatch(doubanUrl);
+      // 提取 doubanId（兼容网页版和手机版链接）
+      // 网页版: https://movie.douban.com/subject/1309069/
+      // 手机版: https://www.douban.com/doubanapp/dispatch/movie/1309069
+      final match = RegExp(r'(?:subject|movie)/(\d+)').firstMatch(doubanUrl);
       if (match == null) {
         throw ScraperException('无效的豆瓣影片链接');
       }
       final doubanId = match.group(1);
 
-      // 调用 WMDB API
+      // Call WMDB API: proxy via backend or direct
+      final url = useProxy
+          ? '${ApiConfig.baseUrl}/api/movie?id=$doubanId'
+          : '${ApiConfig.wmdbApiBase}/movie/api?id=$doubanId';
+
       final response = await _dio.get(
-        '${ApiConfig.wmdbApiBase}/movie/api?id=$doubanId',
+        url,
         options: Options(
           headers: {'Accept': 'application/json'},
         ),

@@ -15,16 +15,18 @@ class AddMoviePage extends StatefulWidget {
   State<AddMoviePage> createState() => _AddMoviePageState();
 }
 
-class _AddMoviePageState extends State<AddMoviePage> with SingleTickerProviderStateMixin {
+class _AddMoviePageState extends State<AddMoviePage>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
   final TextEditingController _urlController = TextEditingController();
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _yearController = TextEditingController();
   final TextEditingController _directorController = TextEditingController();
-  
+
   Movie? _previewMovie;
   List<Movie>? _previewMovies;
   bool _isLoading = false;
+  bool _useProxy = true;
 
   @override
   void initState() {
@@ -62,10 +64,7 @@ class _AddMoviePageState extends State<AddMoviePage> with SingleTickerProviderSt
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [
-          _buildDoubanTab(),
-          _buildManualTab(),
-        ],
+        children: [_buildDoubanTab(), _buildManualTab()],
       ),
     );
   }
@@ -80,21 +79,61 @@ class _AddMoviePageState extends State<AddMoviePage> with SingleTickerProviderSt
         children: [
           TextField(
             controller: _urlController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               hintText: '粘贴豆瓣影片或片单链接',
-              prefixIcon: Icon(Icons.link),
+              prefixIcon: const Icon(Icons.link),
+              suffixIcon: _urlController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.close, size: 20),
+                      onPressed: () {
+                        _urlController.clear();
+                        setState(() {
+                          _previewMovie = null;
+                          _previewMovies = null;
+                        });
+                      },
+                    )
+                  : null,
             ),
             keyboardType: TextInputType.url,
+            onChanged: (_) => setState(() {}),
           ),
           const SizedBox(height: AppTheme.spacingSmall),
           Text(
-            '支持：\n• 影片链接：https://movie.douban.com/subject/xxxx/\n• 片单链接：https://www.douban.com/doulist/xxxx/',
+            '支持：\n• 影片链接：https://movie.douban.com/subject/xxxx/\n• 手机端链接：https://www.douban.com/doubanapp/dispatch/movie/xxxx\n• 片单链接：https://www.douban.com/doulist/xxxx/',
             style: TextStyle(
               fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.55),
+              color: Theme.of(
+                context,
+              ).colorScheme.onSurface.withValues(alpha: 0.55),
             ),
           ),
           const SizedBox(height: AppTheme.spacingMedium),
+          // Proxy toggle
+          Row(
+            children: [
+              Switch(
+                value: _useProxy,
+                onChanged: (v) => setState(() => _useProxy = v),
+                activeTrackColor: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: AppTheme.spacingXSmall),
+              Expanded(
+                child: Text(
+                  _useProxy ? '使用代理（推荐）' : '直连 WMDB（可能无法访问）',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: _useProxy
+                        ? Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withValues(alpha: 0.7)
+                        : AppTheme.accent,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppTheme.spacingSmall),
           PrimaryButton(
             label: _isLoading ? '获取中...' : '获取影片信息',
             icon: Icons.search,
@@ -103,14 +142,14 @@ class _AddMoviePageState extends State<AddMoviePage> with SingleTickerProviderSt
           ),
           if (_previewMovie != null) ...[
             const SizedBox(height: AppTheme.spacingLarge),
-            Text(
-              '预览',
-              style: textTheme.titleMedium,
-            ),
+            Text('预览', style: textTheme.titleMedium),
             const SizedBox(height: AppTheme.spacingMedium),
-            MovieCard(
-              movie: _previewMovie!,
-              onTap: null,
+            Center(
+              child: SizedBox(
+                width: 180,
+                height: 320,
+                child: MovieCard(movie: _previewMovie!, onTap: null),
+              ),
             ),
             const SizedBox(height: AppTheme.spacingMedium),
             PrimaryButton(
@@ -152,10 +191,7 @@ class _AddMoviePageState extends State<AddMoviePage> with SingleTickerProviderSt
                 return Stack(
                   alignment: Alignment.center,
                   children: [
-                    MovieCard(
-                      movie: movie,
-                      onTap: () => _addMovie(movie),
-                    ),
+                    MovieCard(movie: movie, onTap: () => _addMovie(movie)),
                     Positioned.fill(
                       child: Center(
                         child: GestureDetector(
@@ -254,9 +290,12 @@ class _AddMoviePageState extends State<AddMoviePage> with SingleTickerProviderSt
     try {
       final provider = context.read<MovieProvider>();
 
-      if (url.contains('/subject/')) {
+      if (url.contains('/subject/') || url.contains('/dispatch/movie/')) {
         // 单个影片：仅预览，不保存
-        final movie = await provider.fetchMoviePreview(url);
+        final movie = await provider.fetchMoviePreview(
+          url,
+          useProxy: _useProxy,
+        );
         if (movie != null) {
           setState(() {
             _previewMovie = movie;
