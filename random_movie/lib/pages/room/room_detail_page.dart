@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:ui';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,8 +13,8 @@ import 'package:random_movie/services/services.dart';
 import 'package:random_movie/widgets/common/common_widgets.dart';
 import 'package:random_movie/widgets/movie/draw_shuffle_card.dart';
 import 'package:random_movie/widgets/movie/movie_card.dart';
+import 'package:random_movie/widgets/movie/selectable_movie_grid.dart';
 
-/// Room detail page — four phases driven by room.status
 class RoomDetailPage extends StatefulWidget {
   final String roomCode;
   const RoomDetailPage({super.key, required this.roomCode});
@@ -24,617 +24,370 @@ class RoomDetailPage extends StatefulWidget {
 }
 
 class _RoomDetailPageState extends State<RoomDetailPage> {
-  // Draw animation state (reuses SoloDrawPage pattern)
+  static const int _pageSize = 48;
+  final StorageService _storageService = StorageService();
+  final ScrollController _hostScrollController = ScrollController();
+  final TextEditingController _luckyController = TextEditingController();
+  final Set<String> _selectedIds = {};
+  final Map<String, Movie> _movieCache = {};
+  List<Movie> _hostMovies = [];
+  List<Movie> _animCandidates = [];
   Timer? _shuffleTimer;
+  Timer? _countdownTimer;
+  Timer? _syncTimer;
+  DrawResultData? _animResult;
+  String? _previousStatus;
   int _displayIndex = 0;
   int _shuffleCount = 0;
+  int _countdown = 5;
+  int _hostPage = 0;
+  int _hostTotal = 0;
+  bool _hostLoading = true;
+  bool _hostLoadingMore = false;
+  bool _hasMoreHost = true;
+  bool _selectionSynced = false;
+  bool _luckySubmitted = false;
   bool _animationStarted = false;
   bool _animationComplete = false;
-  List<Movie> _animCandidates = [];
-  DrawResultData? _animResult;
-
-  // Movie selection
-  final Set<String> _selectedMovieIds = {};
-  bool _selectionSynced = false;
-
-  // Lucky number
-  final TextEditingController _luckyNumberController = TextEditingController();
-  bool _luckyNumberSubmitted = false;
-  int _countdown = 5;
-  Timer? _countdownTimer;
-
-  // History save guard (prevent duplicate saves)
   bool _historySaved = false;
+  bool _autoPopping = false;
 
-  // Auto-pop guard (prevent re-entry)
-  bool _isAutoPopping = false;
-
-  // Track previous status to detect phase transitions
-  String? _previousStatus;
+  @override
+  void initState() {
+    super.initState();
+    _hostScrollController.addListener(_handleHostScroll);
+    _loadInitialHostMovies();
+  }
 
   @override
   void dispose() {
     _shuffleTimer?.cancel();
     _countdownTimer?.cancel();
-    _luckyNumberController.dispose();
+    _syncTimer?.cancel();
+    _hostScrollController.dispose();
+    _luckyController.dispose();
     super.dispose();
   }
-
-  // ==================== Build ====================
 
   @override
   Widget build(BuildContext context) {
     return Consumer<RoomProvider>(
       builder: (context, roomProvider, _) {
         final room = roomProvider.currentRoom;
-
-        // Room closed or left
-        if (room == null) {
-          // Only auto-pop when server explicitly reported an error
-          // (room-closed / kicked events set roomProvider.error).
-          // Do NOT auto-pop during initial load or manual leave.
-          if (roomProvider.error != null && !_isAutoPopping) {
-            _isAutoPopping = true;
-            final reason = roomProvider.error!;
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              AppToast.error(
-                context,
-                reason,
-                duration: const Duration(seconds: 3),
-              );
-              context.pop();
-            });
-          }
-
-          // Already auto-popping — show transition state
-          if (_isAutoPopping) {
-            return Scaffold(
-              appBar: AppBar(title: const Text('房间')),
-              body: const LoadingState(message: '正在返回...'),
-            );
-          }
-
-          // Fallback: no error but room is null (edge case / loading)
-          return Scaffold(
-            appBar: AppBar(title: const Text('房间')),
-            body: ErrorState(message: '房间连接已断开', onRetry: () => context.pop()),
-          );
-        }
-
-        // Detect phase transitions
-        _handlePhaseTransition(room, roomProvider);
-
+        if (room == null) return _buildDisconnected(roomProvider);
+        _handleTransition(room, roomProvider);
         final canLeave = room.isWaiting || room.isCompleted;
-
         return PopScope(
           canPop: false,
           onPopInvokedWithResult: (didPop, _) {
-            if (didPop) return;
-            if (canLeave) {
-              _showLeaveConfirmDialog(context, roomProvider);
-            }
-            // Collecting / Drawing: do nothing, block back
+            if (!didPop && canLeave) _showLeaveDialog(roomProvider);
           },
           child: Scaffold(
-            appBar: _buildAppBar(context, room),
-            body: _buildBody(context, room, roomProvider),
+            appBar: AppBar(
+              title: Text(
+                room.isCollecting
+                    ? '输入幸运数字'
+                    : room.isDrawing
+                    ? '抽奖中...'
+                    : room.isCompleted
+                    ? '抽奖结果'
+                    : '房间 ${room.code}',
+              ),
+              leading: canLeave
+                  ? IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => _showLeaveDialog(roomProvider),
+                    )
+                  : const SizedBox.shrink(),
+              automaticallyImplyLeading: false,
+            ),
+            body: room.isWaiting
+                ? _buildWaiting(room, roomProvider)
+                : room.isCollecting
+                ? _buildCollecting(room)
+                : room.isDrawing || (_animationStarted && !_animationComplete)
+                ? _buildDrawing(room)
+                : _buildCompleted(room, roomProvider),
           ),
         );
       },
     );
   }
 
-  void _handlePhaseTransition(Room room, RoomProvider roomProvider) {
-    final prevStatus = _previousStatus;
-    _previousStatus = room.status; // Update synchronously
-
-    // Defer setState-triggering operations to avoid calling during build
-    if (room.isCollecting && prevStatus != 'collecting') {
+  Widget _buildDisconnected(RoomProvider roomProvider) {
+    if (roomProvider.error != null && !_autoPopping) {
+      _autoPopping = true;
+      final reason = roomProvider.error!;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _startCountdown();
+        if (!mounted) return;
+        AppToast.error(context, reason, duration: const Duration(seconds: 3));
+        context.pop();
       });
     }
-
-    if (room.isDrawing && !_animationStarted) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _startDrawAnimation(room, roomProvider.drawStartData);
-      });
-    }
-
-    if (room.isWaiting && prevStatus != null && prevStatus != 'waiting') {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _resetState();
-      });
-    }
-  }
-
-  PreferredSizeWidget _buildAppBar(BuildContext context, Room room) {
-    final canLeave = room.isWaiting || room.isCompleted;
-
-    String title;
-    if (room.isCollecting) {
-      title = '输入幸运数字';
-    } else if (room.isDrawing) {
-      title = '抽奖中...';
-    } else if (room.isCompleted) {
-      title = '抽奖结果';
-    } else {
-      title = '房间 ${room.code}';
-    }
-
-    return AppBar(
-      title: Text(title),
-      leading: canLeave
-          ? IconButton(
-              icon: const Icon(Icons.arrow_back),
-              onPressed: () => _showLeaveConfirmDialog(
-                context,
-                context.read<RoomProvider>(),
-              ),
-            )
-          : const SizedBox.shrink(),
-      automaticallyImplyLeading: false,
+    return Scaffold(
+      appBar: AppBar(title: const Text('房间')),
+      body: _autoPopping
+          ? const LoadingState(message: '正在返回...')
+          : ErrorState(message: '房间连接已断开', onRetry: () => context.pop()),
     );
   }
 
-  Widget _buildBody(
-    BuildContext context,
-    Room room,
-    RoomProvider roomProvider,
-  ) {
-    if (room.isWaiting) return _buildWaitingPhase(context, room, roomProvider);
-    if (room.isCollecting)
-      return _buildCollectingPhase(context, room, roomProvider);
-    // Keep showing animation until it completes, even if server already moved to completed
-    if (room.isDrawing || (_animationStarted && !_animationComplete)) {
-      return _buildDrawingPhase(context, room);
-    }
-    if (room.isCompleted)
-      return _buildCompletedPhase(context, room, roomProvider);
-    return const LoadingState(message: '加载中...');
-  }
-
-  // ==================== Dialogs ====================
-
-  void _showLeaveConfirmDialog(
-    BuildContext context,
-    RoomProvider roomProvider,
-  ) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final userId = context.read<UserProvider>().user?.id ?? '';
-
-    showDialog(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.3),
-      builder: (ctx) => BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: AlertDialog(
-          backgroundColor: isDark
-              ? const Color(0xCC1A1A2E)
-              : const Color(0xCCFFFFFF),
-          elevation: 24,
-          shadowColor: Colors.black.withValues(alpha: 0.4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-            side: BorderSide(
-              color: isDark ? const Color(0x1AFFFFFF) : const Color(0x14000000),
-              width: 1,
-            ),
-          ),
-          title: Text(
-            '退出房间',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : AppTheme.textPrimaryDarkOnLight,
-            ),
-          ),
-          content: Text(
-            '确定要退出当前房间吗？',
-            style: TextStyle(
-              color: isDark
-                  ? AppTheme.textSecondary
-                  : AppTheme.textSecondaryDarkOnLight,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: Text(
-                '取消',
-                style: TextStyle(
-                  color: isDark
-                      ? AppTheme.textSecondary
-                      : AppTheme.textSecondaryDarkOnLight,
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                roomProvider.leaveRoom(userId);
-                context.pop();
-              },
-              style: TextButton.styleFrom(foregroundColor: AppTheme.accent),
-              child: const Text(
-                '退出',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ==================== Phase 1: Waiting ====================
-
-  Widget _buildWaitingPhase(
-    BuildContext context,
-    Room room,
-    RoomProvider roomProvider,
-  ) {
-    final userId = context.read<UserProvider>().user?.id ?? '';
-    final isHost = room.isUserHost(userId);
-
-    if (isHost) {
-      return _buildHostWaitingView(context, room, roomProvider, userId);
-    } else {
-      return _buildMemberWaitingView(context, room, userId);
-    }
-  }
-
-  /// Host view: select movies from local library
-  Widget _buildHostWaitingView(
-    BuildContext context,
-    Room room,
-    RoomProvider roomProvider,
-    String userId,
-  ) {
-    final movieProvider = context.read<MovieProvider>();
-    final allMovies = movieProvider.allMovies;
-    final candidateCount = _selectedMovieIds.length;
-
-    // Sync initial selection from server state
-    if (!_selectionSynced) {
-      if (room.selectedMovieIds.isNotEmpty) {
-        _selectedMovieIds.addAll(room.selectedMovieIds);
-      }
+  void _handleTransition(Room room, RoomProvider roomProvider) {
+    if (!_selectionSynced && room.selectedMovieIds.isNotEmpty) {
+      _selectedIds
+        ..clear()
+        ..addAll(room.selectedMovieIds);
+      _cacheRoomMovies(room.moviesById);
       _selectionSynced = true;
     }
-
-    return Column(
-      children: [
-        // Room code (compact bar)
-        _buildRoomCodeBar(context, room),
-
-        // Participants list
-        _buildParticipantsList(context, room),
-
-        // Host's selected movies preview
-        _buildHostSelectedPreview(context, room),
-
-        // Selection toolbar (count + 全选/仅未看)
-        _buildSelectionToolbar(context, allMovies),
-
-        // Movie grid
-        Expanded(
-          child: allMovies.isEmpty
-              ? EmptyState(
-                  title: '片库是空的',
-                  subtitle: '先去添加几部影片吧',
-                  icon: Icons.movie_outlined,
-                  onAction: () => context.go('/movies/add'),
-                  actionLabel: '去添加',
-                )
-              : _buildMovieGrid(context, allMovies, userId, roomProvider),
-        ),
-
-        // Bottom button
-        SafeArea(
-          minimum: const EdgeInsets.all(AppTheme.spacingMedium),
-          child: PrimaryButton(
-            label: candidateCount > 0 ? '准备抽奖（$candidateCount 部候选）' : '请先选择影片',
-            icon: Icons.casino,
-            onPressed: candidateCount > 0
-                ? () => roomProvider.startDraw(userId)
-                : null,
-          ),
-        ),
-      ],
-    );
+    if (room.isCollecting && _previousStatus != 'collecting') {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _startCountdown());
+    }
+    if (room.isDrawing && !_animationStarted) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _startDrawAnimation(room, roomProvider.drawStartData),
+      );
+    }
+    if (room.isWaiting &&
+        _previousStatus != null &&
+        _previousStatus != 'waiting') {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _resetState());
+    }
+    _previousStatus = room.status;
   }
 
-  /// Member view: read-only candidate pool
-  Widget _buildMemberWaitingView(
-    BuildContext context,
-    Room room,
-    String userId,
-  ) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return Column(
-      children: [
-        // Room code (compact bar)
-        _buildRoomCodeBar(context, room),
-
-        // Participants list
-        _buildParticipantsList(context, room),
-
-        // Main content: candidate pool (large, prominent)
-        Expanded(child: _buildMemberCandidatePool(context, room)),
-
-        // Bottom: waiting text
-        SafeArea(
-          minimum: const EdgeInsets.all(AppTheme.spacingMedium),
-          child: Text(
-            '等待房主开始抽奖...',
-            style: TextStyle(
-              fontSize: 15,
-              color: colorScheme.onSurface.withValues(alpha: 0.55),
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ],
-    );
+  Future<void> _loadInitialHostMovies() async {
+    if (!mounted) return;
+    setState(() => _hostLoading = true);
+    try {
+      final results = await Future.wait<Object>([
+        _storageService.countMovies(),
+        _storageService.queryMovies(limit: _pageSize, offset: 0),
+      ]);
+      if (!mounted) return;
+      final total = results[0] as int;
+      final movies = results[1] as List<Movie>;
+      setState(() {
+        _hostTotal = total;
+        _hostMovies = movies;
+        _hostPage = 0;
+        _hasMoreHost = movies.length < total;
+      });
+      _cacheMovies(movies);
+    } finally {
+      if (mounted) setState(() => _hostLoading = false);
+    }
   }
 
-  Widget _buildRoomCodeBar(BuildContext context, Room room) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppTheme.spacingMedium,
-        AppTheme.spacingSmall,
-        AppTheme.spacingMedium,
-        AppTheme.spacingXSmall,
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.meeting_room,
-            size: 18,
-            color: colorScheme.onSurface.withValues(alpha: 0.6),
-          ),
-          const SizedBox(width: AppTheme.spacingXSmall),
-          Text(
-            '房间号:',
-            style: TextStyle(
-              fontSize: 14,
-              color: colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
-          ),
-          const SizedBox(width: AppTheme.spacingSmall),
-          Text(
-            room.code,
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 6,
-              color: colorScheme.onSurface,
-            ),
-          ),
-          const SizedBox(width: AppTheme.spacingXSmall),
-          InkWell(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: room.code));
-              AppToast.info(context, '房间码已复制');
-            },
-            borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
-            child: Padding(
-              padding: const EdgeInsets.all(4),
-              child: Icon(
-                Icons.copy,
-                size: 16,
-                color: colorScheme.onSurface.withValues(alpha: 0.5),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
+  void _handleHostScroll() {
+    if (!_hostScrollController.hasClients) return;
+    if (_hostScrollController.position.pixels >=
+        _hostScrollController.position.maxScrollExtent - 320) {
+      _loadMoreHostMovies();
+    }
   }
 
-  Widget _buildParticipantsList(BuildContext context, Room room) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacingMedium),
-      child: SizedBox(
-        height: 72,
-        child: ListView.separated(
-          scrollDirection: Axis.horizontal,
-          itemCount: room.participants.length,
-          separatorBuilder: (_, __) =>
-              const SizedBox(width: AppTheme.spacingMedium),
-          itemBuilder: (context, index) {
-            final p = room.participants[index];
-            final initial = p.name.isNotEmpty ? p.name.characters.first : '?';
-
-            return SizedBox(
-              width: 52,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Avatar
-                  Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Container(
-                        width: 44,
-                        height: 44,
-                        decoration: BoxDecoration(
-                          color: p.isHost
-                              ? AppTheme.accent.withValues(
-                                  alpha: isDark ? 0.25 : 0.15,
-                                )
-                              : colorScheme.onSurface.withValues(
-                                  alpha: isDark ? 0.12 : 0.08,
-                                ),
-                          borderRadius: BorderRadius.circular(14),
-                          border: p.isHost
-                              ? Border.all(
-                                  color: AppTheme.accent.withValues(alpha: 0.5),
-                                  width: 1.5,
-                                )
-                              : null,
-                        ),
-                        child: Center(
-                          child: Text(
-                            initial,
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: p.isHost
-                                  ? AppTheme.accent
-                                  : colorScheme.onSurface.withValues(
-                                      alpha: 0.7,
-                                    ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      // Host badge
-                      if (p.isHost)
-                        Positioned(
-                          top: -4,
-                          right: -4,
-                          child: Container(
-                            width: 18,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: AppTheme.accent,
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: isDark
-                                    ? const Color(0xFF1A1A2E)
-                                    : Colors.white,
-                                width: 2,
-                              ),
-                            ),
-                            child: const Icon(
-                              Icons.star,
-                              size: 10,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  // Name
-                  Text(
-                    p.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: p.isHost
-                          ? FontWeight.w600
-                          : FontWeight.normal,
-                      color: colorScheme.onSurface.withValues(alpha: 0.7),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
+  Future<void> _loadMoreHostMovies() async {
+    if (_hostLoading || _hostLoadingMore || !_hasMoreHost) return;
+    setState(() => _hostLoadingMore = true);
+    try {
+      final nextPage = _hostPage + 1;
+      final movies = await _storageService.queryMovies(
+        limit: _pageSize,
+        offset: nextPage * _pageSize,
+      );
+      if (!mounted) return;
+      setState(() {
+        _hostMovies = [..._hostMovies, ...movies];
+        _hostPage = nextPage;
+        _hasMoreHost = _hostMovies.length < _hostTotal;
+      });
+      _cacheMovies(movies);
+    } finally {
+      if (mounted) setState(() => _hostLoadingMore = false);
+    }
   }
 
-  /// Host: horizontal preview of currently selected movies
-  Widget _buildHostSelectedPreview(BuildContext context, Room room) {
-    if (_selectedMovieIds.isEmpty || room.moviesById == null)
-      return const SizedBox.shrink();
+  void _cacheMovies(Iterable<Movie> movies) {
+    for (final movie in movies) {
+      _movieCache[movie.id] = movie;
+    }
+  }
 
-    final candidates = <Movie>[];
-    for (final id in _selectedMovieIds) {
-      final json = room.moviesById![id];
-      if (json is Map<String, dynamic>) {
+  void _cacheRoomMovies(Map<String, dynamic>? moviesById) {
+    if (moviesById == null) return;
+    for (final entry in moviesById.entries) {
+      final raw = entry.value;
+      if (raw is Map<String, dynamic>) {
         try {
-          candidates.add(Movie.fromJson(json));
+          final movie = Movie.fromJson(raw);
+          _movieCache[movie.id] = movie;
         } catch (_) {}
       }
     }
-    if (candidates.isEmpty) return const SizedBox.shrink();
+  }
 
+  List<Movie> _selectedMoviesFromRoom(Room room) {
+    _cacheRoomMovies(room.moviesById);
+    return room.selectedMovieIds
+        .map((id) => _movieCache[id])
+        .whereType<Movie>()
+        .toList();
+  }
+
+  Future<void> _selectAll() async {
+    final ids = await _storageService.queryMovieIds();
+    if (!mounted) return;
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(ids);
+    });
+    _scheduleSync();
+  }
+
+  Future<void> _selectUnwatched() async {
+    final ids = await _storageService.queryMovieIds(unwatchedOnly: true);
+    if (!mounted) return;
+    setState(() {
+      _selectedIds
+        ..clear()
+        ..addAll(ids);
+    });
+    _scheduleSync();
+  }
+
+  void _toggleMovie(Movie movie) {
+    setState(() {
+      if (_selectedIds.contains(movie.id)) {
+        _selectedIds.remove(movie.id);
+      } else {
+        _selectedIds.add(movie.id);
+      }
+    });
+    _movieCache[movie.id] = movie;
+    _scheduleSync();
+  }
+
+  void _scheduleSync() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer(
+      const Duration(milliseconds: 250),
+      _syncSelectionToServer,
+    );
+  }
+
+  Future<void> _syncSelectionToServer() async {
+    final userId = context.read<UserProvider>().user?.id ?? '';
+    final roomProvider = context.read<RoomProvider>();
+    final missing = _selectedIds
+        .where((id) => !_movieCache.containsKey(id))
+        .toList();
+    if (missing.isNotEmpty)
+      _cacheMovies(await _storageService.getMoviesByIds(missing));
+    final moviesData = <String, dynamic>{};
+    for (final id in _selectedIds) {
+      final movie = _movieCache[id];
+      if (movie != null) moviesData[id] = movie.toJson();
+    }
+    roomProvider.updateRoomMovies(userId, _selectedIds.toList(), moviesData);
+  }
+
+  Widget _buildWaiting(Room room, RoomProvider roomProvider) {
+    final userId = context.read<UserProvider>().user?.id ?? '';
+    final isHost = room.isUserHost(userId);
     final colorScheme = Theme.of(context).colorScheme;
+    final selectedMovies = isHost
+        ? _selectedIds.map((id) => _movieCache[id]).whereType<Movie>().toList()
+        : _selectedMoviesFromRoom(room);
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppTheme.spacingMedium,
-        AppTheme.spacingSmall,
-        AppTheme.spacingMedium,
-        0,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(AppTheme.spacingMedium),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                Icons.local_movies,
-                size: 16,
-                color: colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-              const SizedBox(width: AppTheme.spacingXSmall),
+              const Icon(Icons.meeting_room, size: 18),
+              const SizedBox(width: 8),
               Text(
-                '已选影片 (${candidates.length})',
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurface.withValues(alpha: 0.7),
-                ),
+                '房间号 ${room.code}',
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(width: 8),
+              IconButton(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: room.code));
+                  AppToast.info(context, '房间码已复制');
+                },
+                icon: const Icon(Icons.copy, size: 18),
               ),
             ],
           ),
-          const SizedBox(height: AppTheme.spacingXSmall),
+        ),
+        SizedBox(
+          height: 64,
+          child: ListView.separated(
+            key: const PageStorageKey('room-members'),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppTheme.spacingMedium,
+            ),
+            scrollDirection: Axis.horizontal,
+            itemCount: room.participants.length,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (context, index) {
+              final participant = room.participants[index];
+              final initial = participant.name.isNotEmpty
+                  ? participant.name.characters.first
+                  : '?';
+              return Chip(
+                avatar: CircleAvatar(
+                  child: Center(
+                    child: Text(
+                      initial,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        height: 1,
+                      ),
+                      strutStyle: const StrutStyle(
+                        height: 1,
+                        leading: 0,
+                        forceStrutHeight: true,
+                      ),
+                    ),
+                  ),
+                ),
+                label: Text(
+                  participant.isHost
+                      ? '${participant.name} ★'
+                      : participant.name,
+                ),
+              );
+            },
+          ),
+        ),
+        if (selectedMovies.isNotEmpty)
           SizedBox(
-            height: 140,
+            height: 128,
             child: ListView.separated(
+              key: const PageStorageKey('room-selected-preview'),
+              padding: const EdgeInsets.all(AppTheme.spacingMedium),
               scrollDirection: Axis.horizontal,
-              itemCount: candidates.length,
-              separatorBuilder: (_, __) =>
-                  const SizedBox(width: AppTheme.spacingSmall),
+              itemCount: selectedMovies.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 12),
               itemBuilder: (context, index) {
-                final movie = candidates[index];
+                final movie = selectedMovies[index];
                 return SizedBox(
-                  width: 80,
+                  width: 84,
                   child: Column(
                     children: [
-                      Expanded(
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(
-                            AppTheme.radiusSmall,
-                          ),
-                          child: movie.poster.isNotEmpty
-                              ? CachedNetworkImage(
-                                  imageUrl: movie.poster,
-                                  httpHeaders: ApiConfig.imageHeaders,
-                                  fit: BoxFit.cover,
-                                  width: double.infinity,
-                                )
-                              : Container(
-                                  color: colorScheme.surfaceContainerHighest,
-                                  child: const Center(
-                                    child: Icon(Icons.movie, size: 24),
-                                  ),
-                                ),
-                        ),
-                      ),
+                      Expanded(child: _poster(movie.poster, 84)),
                       const SizedBox(height: 4),
                       Text(
                         movie.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: colorScheme.onSurface.withValues(alpha: 0.8),
-                        ),
                       ),
                     ],
                   ),
@@ -642,431 +395,198 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
               },
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  /// Member: large candidate pool showing host's selections (read-only)
-  Widget _buildMemberCandidatePool(BuildContext context, Room room) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    if (room.selectedMovieIds.isEmpty || room.moviesById == null) {
-      return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.hourglass_empty,
-              size: 64,
-              color: colorScheme.onSurface.withValues(alpha: 0.2),
+        if (isHost)
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppTheme.spacingMedium,
             ),
-            const SizedBox(height: AppTheme.spacingMedium),
-            Text(
-              '等待房主选择影片...',
-              style: TextStyle(
-                fontSize: 16,
-                color: colorScheme.onSurface.withValues(alpha: 0.5),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-
-    final candidates = <Movie>[];
-    for (final id in room.selectedMovieIds) {
-      final json = room.moviesById![id];
-      if (json is Map<String, dynamic>) {
-        try {
-          candidates.add(Movie.fromJson(json));
-        } catch (_) {}
-      }
-    }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacingMedium),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: AppTheme.spacingSmall),
-          Row(
-            children: [
-              Icon(
-                Icons.local_movies,
-                size: 16,
-                color: colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-              const SizedBox(width: AppTheme.spacingXSmall),
-              Text(
-                '房主已选 ${candidates.length} 部影片',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: colorScheme.onSurface.withValues(alpha: 0.7),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppTheme.spacingSmall),
-          Expanded(
-            child: GridView.builder(
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3,
-                childAspectRatio: 0.60,
-                crossAxisSpacing: AppTheme.spacingSmall,
-                mainAxisSpacing: AppTheme.spacingSmall,
-              ),
-              itemCount: candidates.length,
-              itemBuilder: (context, index) {
-                final movie = candidates[index];
-                return ClipRRect(
-                  borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-                  child: Stack(
-                    children: [
-                      AspectRatio(
-                        aspectRatio: 0.65,
-                        child: movie.poster.isNotEmpty
-                            ? CachedNetworkImage(
-                                imageUrl: movie.poster,
-                                httpHeaders: ApiConfig.imageHeaders,
-                                fit: BoxFit.cover,
-                              )
-                            : Container(
-                                color: colorScheme.surfaceContainerHighest,
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    const Icon(Icons.movie, size: 28),
-                                    const SizedBox(height: 4),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                      ),
-                                      child: Text(
-                                        movie.title,
-                                        textAlign: TextAlign.center,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(fontSize: 11),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                      ),
-                      // Title at bottom
-                      Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: const BoxDecoration(
-                            gradient: LinearGradient(
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                              colors: [Colors.transparent, Colors.black87],
-                            ),
-                          ),
-                          child: Text(
-                            movie.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSelectionToolbar(BuildContext context, List<Movie> allMovies) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final allSelected =
-        allMovies.isNotEmpty &&
-        allMovies.every((m) => _selectedMovieIds.contains(m.id));
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        AppTheme.spacingMedium,
-        AppTheme.spacingXSmall,
-        AppTheme.spacingMedium,
-        AppTheme.spacingXSmall,
-      ),
-      child: Row(
-        children: [
-          Text(
-            '已选 ${_selectedMovieIds.length} / 共 ${allMovies.length} 部',
-            style: TextStyle(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: colorScheme.onSurface.withValues(alpha: 0.7),
-            ),
-          ),
-          const Spacer(),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                if (allSelected) {
-                  _selectedMovieIds.clear();
-                } else {
-                  _selectedMovieIds.clear();
-                  _selectedMovieIds.addAll(allMovies.map((m) => m.id));
-                }
-              });
-              _syncSelectionToServer(allMovies);
-            },
-            child: Text(allSelected ? '反全选' : '全选'),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _selectedMovieIds.clear();
-                final unwatched = allMovies.where((m) => !m.watched);
-                _selectedMovieIds.addAll(unwatched.map((m) => m.id));
-              });
-              _syncSelectionToServer(allMovies);
-            },
-            child: const Text('仅未看'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _syncSelectionToServer(List<Movie> allMovies) {
-    final userId = context.read<UserProvider>().user?.id ?? '';
-    final roomProvider = context.read<RoomProvider>();
-    final moviesData = <String, dynamic>{};
-    for (final id in _selectedMovieIds) {
-      final m = allMovies.firstWhere(
-        (m) => m.id == id,
-        orElse: () => allMovies.first,
-      );
-      moviesData[id] = m.toJson();
-    }
-    roomProvider.updateRoomMovies(
-      userId,
-      _selectedMovieIds.toList(),
-      moviesData,
-    );
-  }
-
-  Widget _buildMovieGrid(
-    BuildContext context,
-    List<Movie> allMovies,
-    String userId,
-    RoomProvider roomProvider,
-  ) {
-    final colorScheme = Theme.of(context).colorScheme;
-
-    return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacingMedium),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.55,
-        crossAxisSpacing: AppTheme.spacingSmall,
-        mainAxisSpacing: AppTheme.spacingSmall,
-      ),
-      itemCount: allMovies.length,
-      itemBuilder: (context, index) {
-        final movie = allMovies[index];
-        final selected = _selectedMovieIds.contains(movie.id);
-
-        return GestureDetector(
-          onTap: () {
-            setState(() {
-              if (selected) {
-                _selectedMovieIds.remove(movie.id);
-              } else {
-                _selectedMovieIds.add(movie.id);
-              }
-            });
-            // Sync single toggle to server
-            final moviesData = <String, dynamic>{};
-            for (final id in _selectedMovieIds) {
-              final m = allMovies.firstWhere(
-                (m) => m.id == id,
-                orElse: () => movie,
-              );
-              moviesData[id] = m.toJson();
-            }
-            roomProvider.updateRoomMovies(
-              userId,
-              _selectedMovieIds.toList(),
-              moviesData,
-            );
-          },
-          child: AnimatedOpacity(
-            opacity: selected ? 1.0 : 0.4,
-            duration: const Duration(milliseconds: 200),
-            child: Stack(
+            child: Row(
               children: [
-                Container(
-                  decoration: selected
-                      ? BoxDecoration(
-                          borderRadius: BorderRadius.circular(
-                            AppTheme.radiusLarge,
-                          ),
-                          border: Border.all(color: AppTheme.accent, width: 2),
-                        )
-                      : null,
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(
-                      AppTheme.radiusLarge - 1,
-                    ),
-                    child: AspectRatio(
-                      aspectRatio: 0.65,
-                      child: movie.poster.isNotEmpty
-                          ? CachedNetworkImage(
-                              imageUrl: movie.poster,
-                              httpHeaders: ApiConfig.imageHeaders,
-                              fit: BoxFit.cover,
-                            )
-                          : Container(
-                              color: colorScheme.surfaceContainerHighest,
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  const Icon(Icons.movie, size: 28),
-                                  const SizedBox(height: 4),
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 4,
-                                    ),
-                                    child: Text(
-                                      movie.title,
-                                      textAlign: TextAlign.center,
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(fontSize: 11),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                    ),
+                Text(
+                  '已选 ${_selectedIds.length} / 共 $_hostTotal 部',
+                  style: TextStyle(
+                    color: colorScheme.onSurface.withValues(alpha: 0.7),
                   ),
                 ),
-                // Checkbox overlay
-                Positioned(
-                  top: 4,
-                  right: 4,
-                  child: Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: selected
-                          ? AppTheme.accent
-                          : Colors.black.withValues(alpha: 0.5),
-                    ),
-                    child: selected
-                        ? const Icon(Icons.check, size: 16, color: Colors.white)
-                        : null,
-                  ),
-                ),
-                // Title at bottom
-                Positioned(
-                  left: 0,
-                  right: 0,
-                  bottom: 0,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [Colors.transparent, Colors.black87],
-                      ),
-                      borderRadius: BorderRadius.vertical(
-                        bottom: Radius.circular(AppTheme.radiusLarge - 1),
-                      ),
-                    ),
-                    child: Text(
-                      movie.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ),
+                const Spacer(),
+                TextButton(onPressed: _selectAll, child: const Text('全选')),
+                TextButton(
+                  onPressed: _selectUnwatched,
+                  child: const Text('仅未看'),
                 ),
               ],
             ),
+          )
+        else
+          Padding(
+            padding: const EdgeInsets.all(AppTheme.spacingMedium),
+            child: Text(
+              selectedMovies.isEmpty
+                  ? '等待房主选择电影...'
+                  : '房主已选 ${selectedMovies.length} 部电影',
+              style: TextStyle(
+                color: colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
           ),
-        );
-      },
+        Expanded(
+          child: isHost
+              ? _hostLoading
+                    ? const LoadingState(message: '加载片库中...')
+                    : _hostTotal == 0
+                    ? EmptyState(
+                        title: '片库是空的',
+                        subtitle: '先去添加几部电影吧',
+                        icon: Icons.movie_outlined,
+                        onAction: () => context.go('/movies/add'),
+                        actionLabel: '去添加',
+                      )
+                    : SelectableMovieGrid(
+                        storageKey: const PageStorageKey('room-host-grid'),
+                        controller: _hostScrollController,
+                        movies: _hostMovies,
+                        selectedIds: _selectedIds,
+                        hasMore: _hasMoreHost,
+                        isLoadingMore: _hostLoadingMore,
+                        onToggle: _toggleMovie,
+                      )
+              : GridView.builder(
+                  key: const PageStorageKey('room-member-grid'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: AppTheme.spacingMedium,
+                  ),
+                  cacheExtent: MediaQuery.of(context).size.height * 1.5,
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    childAspectRatio: 0.60,
+                    crossAxisSpacing: AppTheme.spacingSmall,
+                    mainAxisSpacing: AppTheme.spacingSmall,
+                  ),
+                  itemCount: selectedMovies.length,
+                  itemBuilder: (context, index) =>
+                      _posterStack(selectedMovies[index]),
+                ),
+        ),
+        SafeArea(
+          minimum: const EdgeInsets.all(AppTheme.spacingMedium),
+          child: isHost
+              ? PrimaryButton(
+                  label: _selectedIds.isNotEmpty
+                      ? '准备抽奖（${_selectedIds.length} 部）'
+                      : '请先选择电影',
+                  icon: Icons.casino,
+                  onPressed: _selectedIds.isNotEmpty
+                      ? () => roomProvider.startDraw(userId)
+                      : null,
+                )
+              : Text(
+                  '等待房主开始抽奖...',
+                  style: TextStyle(
+                    color: colorScheme.onSurface.withValues(alpha: 0.55),
+                  ),
+                ),
+        ),
+      ],
     );
   }
 
-  // ==================== Phase 2: Collecting ====================
+  Widget _poster(String url, double width) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
+      child: SizedBox(
+        width: width,
+        child: url.isNotEmpty
+            ? CachedNetworkImage(
+                imageUrl: url,
+                httpHeaders: ApiConfig.imageHeaders,
+                fit: BoxFit.cover,
+                memCacheWidth: 240,
+                maxWidthDiskCache: 240,
+                fadeInDuration: Duration.zero,
+              )
+            : const ColoredBox(
+                color: Colors.black12,
+                child: Center(child: Icon(Icons.movie)),
+              ),
+      ),
+    );
+  }
+
+  Widget _posterStack(Movie movie) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+      child: Stack(
+        children: [
+          Positioned.fill(child: _poster(movie.poster, double.infinity)),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.all(6),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black87],
+                ),
+              ),
+              child: Text(
+                movie.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _startCountdown() {
     _countdown = 5;
-    _luckyNumberSubmitted = false;
-    _luckyNumberController.clear();
+    _luckySubmitted = false;
+    _luckyController.clear();
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
+      if (!mounted) return timer.cancel();
       setState(() {
         _countdown--;
         if (_countdown <= 0) {
           timer.cancel();
-          _autoSubmitLuckyNumber();
+          final room = context.read<RoomProvider>().currentRoom;
+          final userId = context.read<UserProvider>().user?.id ?? '';
+          if (room != null)
+            _submitLucky(
+              userId,
+              DrawService.autoLuckyNumber(userId, room.code),
+            );
         }
       });
     });
   }
 
-  void _autoSubmitLuckyNumber() {
-    if (_luckyNumberSubmitted) return;
-    final userId = context.read<UserProvider>().user?.id ?? '';
-    final room = context.read<RoomProvider>().currentRoom;
-    if (room == null) return;
-    final autoNumber = DrawService.autoLuckyNumber(userId, room.code);
-    _submitLucky(userId, autoNumber);
-  }
-
   void _submitLucky(String userId, int number) {
-    if (_luckyNumberSubmitted) return;
-    setState(() => _luckyNumberSubmitted = true);
+    if (_luckySubmitted) return;
     context.read<RoomProvider>().submitLuckyNumber(userId, number);
+    setState(() {
+      _luckySubmitted = true;
+      _luckyController.text = number.toString();
+    });
   }
 
-  Widget _buildCollectingPhase(
-    BuildContext context,
-    Room room,
-    RoomProvider roomProvider,
-  ) {
+  Widget _buildCollecting(Room room) {
     final colorScheme = Theme.of(context).colorScheme;
     final userId = context.read<UserProvider>().user?.id ?? '';
-
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppTheme.spacingLarge),
       child: Column(
         children: [
-          const SizedBox(height: AppTheme.spacingXLarge),
-
-          // Countdown display
           Text(
             '$_countdown',
             style: TextStyle(
@@ -1078,31 +598,23 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
           Text(
             '秒后自动分配',
             style: TextStyle(
-              fontSize: 14,
               color: colorScheme.onSurface.withValues(alpha: 0.5),
             ),
           ),
-
           const SizedBox(height: AppTheme.spacingXLarge),
-
-          // Lucky number input
-          GlassContainer(
+          SoftContainer(
             padding: const EdgeInsets.all(AppTheme.spacingLarge),
             child: Column(
               children: [
-                Text(
+                const Text(
                   '输入你的幸运数字',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurface,
-                  ),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: AppTheme.spacingMedium),
-                if (_luckyNumberSubmitted)
+                if (_luckySubmitted)
                   Text(
-                    '已提交: ${_luckyNumberController.text.isNotEmpty ? _luckyNumberController.text : "自动分配"}',
-                    style: TextStyle(
+                    '已提交 ${_luckyController.text}',
+                    style: const TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
                       color: AppTheme.accent,
@@ -1112,20 +624,16 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                   SizedBox(
                     width: 120,
                     child: TextField(
-                      controller: _luckyNumberController,
+                      controller: _luckyController,
                       keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      maxLength: 2,
+                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                       decoration: const InputDecoration(
                         hintText: '1-99',
                         counterText: '',
                         border: OutlineInputBorder(),
                       ),
-                      maxLength: 2,
-                      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                     ),
                   ),
                   const SizedBox(height: AppTheme.spacingMedium),
@@ -1134,9 +642,7 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
                     icon: Icons.check,
                     isFullWidth: false,
                     onPressed: () {
-                      final text = _luckyNumberController.text.trim();
-                      if (text.isEmpty) return;
-                      final number = int.tryParse(text);
+                      final number = int.tryParse(_luckyController.text.trim());
                       if (number == null || number < 1 || number > 99) {
                         AppToast.error(context, '请输入 1-99 之间的数字');
                         return;
@@ -1148,72 +654,29 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
               ],
             ),
           ),
-
           const SizedBox(height: AppTheme.spacingLarge),
-
-          // Participant status list
-          GlassContainer(
+          SoftContainer(
             padding: const EdgeInsets.all(AppTheme.spacingMedium),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '参与者状态',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurface.withValues(alpha: 0.7),
-                  ),
-                ),
-                const SizedBox(height: AppTheme.spacingSmall),
-                ...room.participants.map((p) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Icon(
-                          p.luckyNumber != null
-                              ? Icons.check_circle
-                              : Icons.hourglass_empty,
-                          size: 18,
-                          color: p.luckyNumber != null
-                              ? Colors.green
-                              : colorScheme.onSurface.withValues(alpha: 0.4),
-                        ),
-                        const SizedBox(width: AppTheme.spacingSmall),
-                        Expanded(
-                          child: Text(
-                            p.name,
-                            style: TextStyle(
-                              fontSize: 15,
-                              color: colorScheme.onSurface,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          p.luckyNumber != null ? '${p.luckyNumber}' : '...',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                            color: p.luckyNumber != null
-                                ? AppTheme.accent
-                                : colorScheme.onSurface.withValues(alpha: 0.3),
-                          ),
-                        ),
-                      ],
+              children: room.participants
+                  .map(
+                    (participant) => ListTile(
+                      dense: true,
+                      leading: Icon(
+                        participant.luckyNumber != null
+                            ? Icons.check_circle
+                            : Icons.hourglass_empty,
+                        color: participant.luckyNumber != null
+                            ? Colors.green
+                            : colorScheme.onSurface.withValues(alpha: 0.4),
+                      ),
+                      title: Text(participant.name),
+                      trailing: Text(
+                        participant.luckyNumber?.toString() ?? '...',
+                      ),
                     ),
-                  );
-                }),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: AppTheme.spacingMedium),
-          Text(
-            '倒计时结束将自动分配随机数字',
-            style: TextStyle(
-              fontSize: 12,
-              color: colorScheme.onSurface.withValues(alpha: 0.4),
+                  )
+                  .toList(),
             ),
           ),
         ],
@@ -1221,81 +684,36 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
     );
   }
 
-  // ==================== Phase 3: Drawing ====================
-
   void _startDrawAnimation(Room room, DrawStartData? drawStartData) {
-    // Build candidates from multiple sources (robust fallback chain)
-    List<Movie> candidates = [];
-
-    // Source 1: drawStartData.movies (preferred, has server seed)
-    if (drawStartData != null && drawStartData.movies.isNotEmpty) {
-      for (final movieData in drawStartData.movies) {
-        try {
-          if (movieData is Map<String, dynamic>) {
-            candidates.add(Movie.fromJson(movieData));
-          } else if (movieData is String && room.moviesById != null) {
-            final json = room.moviesById![movieData];
-            if (json is Map<String, dynamic>) {
-              candidates.add(Movie.fromJson(json));
-            }
-          }
-        } catch (_) {
-          // Skip unparseable entries
-        }
-      }
-    }
-
-    // Source 2: room.moviesById + selectedMovieIds (fallback)
-    if (candidates.isEmpty && room.moviesById != null) {
-      for (final id in room.selectedMovieIds) {
-        try {
-          final json = room.moviesById![id];
-          if (json is Map<String, dynamic>) {
-            candidates.add(Movie.fromJson(json));
-          }
-        } catch (_) {}
-      }
-      // Last resort: all movies in moviesById
-      if (candidates.isEmpty) {
-        for (final entry in room.moviesById!.entries) {
+    final candidates = <Movie>[];
+    if (drawStartData != null) {
+      for (final raw in drawStartData.movies) {
+        if (raw is Map<String, dynamic>) {
           try {
-            if (entry.value is Map<String, dynamic>) {
-              candidates.add(
-                Movie.fromJson(entry.value as Map<String, dynamic>),
-              );
-            }
+            candidates.add(Movie.fromJson(raw));
           } catch (_) {}
+        } else if (raw is String && _movieCache[raw] != null) {
+          candidates.add(_movieCache[raw]!);
         }
       }
     }
-
-    // If still no candidates, don't mark as started — will retry on next rebuild
+    if (candidates.isEmpty) candidates.addAll(_selectedMoviesFromRoom(room));
     if (candidates.isEmpty) return;
-
     _animationStarted = true;
     _animationComplete = false;
     _animCandidates = candidates;
-
-    // Calculate result if server seed is available
-    if (drawStartData != null) {
-      _animResult = DrawService.roomRandom(_animCandidates, drawStartData.seed);
-    }
-    // If no seed yet, _animResult stays null — resolved in _startSlowPhase
-
-    // Start shuffle animation (same pattern as SoloDrawPage)
+    _animResult = drawStartData == null
+        ? null
+        : DrawService.roomRandom(candidates, drawStartData.seed);
     _shuffleCount = 0;
     _displayIndex = 0;
-
     _shuffleTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
+      if (!mounted) return timer.cancel();
       _shuffleCount++;
       if (_shuffleCount <= 20) {
-        setState(() {
-          _displayIndex = (_displayIndex + 1) % _animCandidates.length;
-        });
+        setState(
+          () => _displayIndex = (_displayIndex + 1) % _animCandidates.length,
+        );
       } else {
         timer.cancel();
         _startSlowPhase(0);
@@ -1304,16 +722,16 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
   }
 
   void _startSlowPhase(int step) {
-    const int slowSteps = 4;
-    if (step >= slowSteps) {
-      // Resolve result if not yet determined (drawStartData arrived late or absent)
+    if (step >= 4) {
       _resolveAnimResult();
-
-      // Final: land on result
       setState(() {
-        if (_animResult != null) {
-          _displayIndex = _animCandidates.indexOf(_animResult!.selectedMovie);
-          if (_displayIndex == -1) _displayIndex = 0;
+        if (_animResult == null) {
+          _displayIndex = 0;
+        } else {
+          final resultIndex = _animCandidates.indexOf(
+            _animResult!.selectedMovie,
+          );
+          _displayIndex = resultIndex < 0 ? 0 : resultIndex;
         }
       });
       Future.delayed(const Duration(milliseconds: 500), () {
@@ -1323,24 +741,18 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
       });
       return;
     }
-
-    final delay = Duration(milliseconds: 200 + step * 100);
-    Future.delayed(delay, () {
+    Future.delayed(Duration(milliseconds: 200 + step * 100), () {
       if (!mounted) return;
-      setState(() {
-        _displayIndex = (_displayIndex + 1) % _animCandidates.length;
-      });
+      setState(
+        () => _displayIndex = (_displayIndex + 1) % _animCandidates.length,
+      );
       _startSlowPhase(step + 1);
     });
   }
 
-  /// Resolve _animResult from available data sources (drawStartData or drawResult)
   void _resolveAnimResult() {
     if (_animResult != null) return;
-
     final roomProvider = context.read<RoomProvider>();
-
-    // Try 1: drawStartData arrived late — use its seed
     if (roomProvider.drawStartData != null) {
       _animResult = DrawService.roomRandom(
         _animCandidates,
@@ -1348,23 +760,19 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
       );
       return;
     }
-
-    // Try 2: draw-result already arrived — use drawResult
     final room = roomProvider.currentRoom;
     if (room?.drawResult != null) {
-      final resultMovie = _animCandidates.firstWhere(
-        (m) => m.id == room!.drawResult!.movieId,
+      final movie = _animCandidates.firstWhere(
+        (candidate) => candidate.id == room!.drawResult!.movieId,
         orElse: () => _animCandidates.first,
       );
       _animResult = DrawResultData(
-        selectedMovie: resultMovie,
+        selectedMovie: movie,
         seed: room!.drawResult!.seed,
-        index: _animCandidates.indexOf(resultMovie),
+        index: _animCandidates.indexOf(movie),
       );
       return;
     }
-
-    // Last resort: pick first candidate (should rarely happen)
     _animResult = DrawResultData(
       selectedMovie: _animCandidates.first,
       seed: 0,
@@ -1374,239 +782,105 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
 
   void _saveHistory() {
     if (_historySaved) return;
-    _historySaved = true;
-
     final room = context.read<RoomProvider>().currentRoom;
     if (room == null || room.drawResult == null) return;
-
+    _historySaved = true;
+    final poster = _movieCache[room.drawResult!.movieId]?.poster ?? '';
     final record = DrawService.buildRoomRecord(
       roomCode: room.code,
       drawResult: room.drawResult!,
       participants: room.participants,
-      candidateCount: _animCandidates.isNotEmpty
-          ? _animCandidates.length
-          : room.selectedMovieIds.length,
-      moviePoster: room.moviesById?[room.drawResult!.movieId]?['poster'] ?? '',
+      candidateCount: _animCandidates.isEmpty
+          ? room.selectedMovieIds.length
+          : _animCandidates.length,
+      moviePoster: poster,
     );
     context.read<DrawHistoryProvider>().addRecord(record);
   }
 
-  Widget _buildDrawingPhase(BuildContext context, Room room) {
-    // If animation is complete, show completed phase directly
-    if (_animationComplete) {
-      return _buildCompletedPhase(context, room, context.read<RoomProvider>());
-    }
-
-    if (_animCandidates.isEmpty) {
+  Widget _buildDrawing(Room room) {
+    if (_animationComplete)
+      return _buildCompleted(room, context.read<RoomProvider>());
+    if (_animCandidates.isEmpty)
       return const LoadingState(message: '准备抽奖数据...');
-    }
-
-    final currentMovie =
-        _animCandidates[_displayIndex % _animCandidates.length];
-    final colorScheme = Theme.of(context).colorScheme;
-
+    final movie = _animCandidates[_displayIndex % _animCandidates.length];
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           AnimatedSwitcher(
             duration: const Duration(milliseconds: 80),
-            child: DrawShuffleCard(
-              movie: currentMovie,
-              shuffleCount: _shuffleCount,
-            ),
+            child: DrawShuffleCard(movie: movie, shuffleCount: _shuffleCount),
           ),
           const SizedBox(height: AppTheme.spacingLarge),
-          Text(
+          const Text(
             '抽取中...',
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w600,
-              color: colorScheme.onSurface.withValues(alpha: 0.6),
-            ),
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
           ),
         ],
       ),
     );
   }
 
-  // ==================== Phase 4: Completed ====================
-
-  Widget _buildCompletedPhase(
-    BuildContext context,
-    Room room,
-    RoomProvider roomProvider,
-  ) {
-    final colorScheme = Theme.of(context).colorScheme;
+  Widget _buildCompleted(Room room, RoomProvider roomProvider) {
+    Movie? movie;
+    if (room.drawResult != null) movie = _movieCache[room.drawResult!.movieId];
+    movie ??= _animResult?.selectedMovie;
+    if (movie == null) return const LoadingState(message: '加载抽奖结果...');
+    final resultMovie = movie;
     final userId = context.read<UserProvider>().user?.id ?? '';
     final isHost = room.isUserHost(userId);
-
-    // Get result movie
-    Movie? resultMovie;
-    if (room.drawResult != null && room.moviesById != null) {
-      final movieJson = room.moviesById![room.drawResult!.movieId];
-      if (movieJson is Map<String, dynamic>) {
-        resultMovie = Movie.fromJson(movieJson);
-      }
-    }
-    // Fallback: use animation result
-    resultMovie ??= _animResult?.selectedMovie;
-
-    if (resultMovie == null) {
-      return const LoadingState(message: '加载抽奖结果...');
-    }
-
-    // Ensure history is saved (deferred to avoid setState during build)
     if (!_historySaved && room.drawResult != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _saveHistory();
-      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _saveHistory());
     }
-
     return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(
-        horizontal: AppTheme.spacingLarge,
-        vertical: AppTheme.spacingMedium,
-      ),
+      padding: const EdgeInsets.all(AppTheme.spacingLarge),
       child: Column(
         children: [
+          const Icon(Icons.celebration, size: 48, color: AppTheme.accent),
           const SizedBox(height: AppTheme.spacingSmall),
-          Icon(Icons.celebration, size: 48, color: AppTheme.accent),
-          const SizedBox(height: AppTheme.spacingSmall),
-          Text(
+          const Text(
             '恭喜抽中！',
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: colorScheme.onSurface,
-            ),
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
           const SizedBox(height: AppTheme.spacingLarge),
-
-          // Result movie card
           SizedBox(
             width: 200,
             height: 330,
             child: MovieCard(
               movie: resultMovie,
               showWatchedBadge: false,
-              onTap: () => context.push('/movies/detail/${resultMovie!.id}'),
+              onTap: () => context.push('/movies/detail/${resultMovie.id}'),
             ),
           ),
-
           const SizedBox(height: AppTheme.spacingXLarge),
-
-          // Participant lucky numbers table
-          GlassContainer(
+          SoftContainer(
             padding: const EdgeInsets.all(AppTheme.spacingMedium),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '全员幸运数字',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: AppTheme.spacingSmall),
-                // Table header
-                Row(
-                  children: [
-                    Expanded(
-                      flex: 3,
-                      child: Text(
-                        '名称',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurface.withValues(alpha: 0.5),
-                        ),
+              children: room.participants
+                  .map(
+                    (participant) => ListTile(
+                      dense: true,
+                      title: Text(
+                        participant.isHost
+                            ? '${participant.name} ★'
+                            : participant.name,
                       ),
+                      trailing: Text('${participant.luckyNumber ?? '-'}'),
                     ),
-                    Expanded(
-                      flex: 2,
-                      child: Text(
-                        '幸运数字',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: colorScheme.onSurface.withValues(alpha: 0.5),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const Divider(height: AppTheme.spacingMedium),
-                // Table rows
-                ...room.participants.map((p) {
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          flex: 3,
-                          child: Row(
-                            children: [
-                              if (p.isHost)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 4),
-                                  child: Icon(
-                                    Icons.star,
-                                    size: 14,
-                                    color: AppTheme.accent,
-                                  ),
-                                ),
-                              Flexible(
-                                child: Text(
-                                  p.name,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: colorScheme.onSurface,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          flex: 2,
-                          child: Text(
-                            '${p.luckyNumber ?? '-'}',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                              color: AppTheme.accent,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
+                  )
+                  .toList(),
             ),
           ),
-
-          // Seed info
           if (room.drawResult != null) ...[
             const SizedBox(height: AppTheme.spacingSmall),
             Text(
               'seed: ${room.drawResult!.seed}',
-              style: TextStyle(
-                fontSize: 11,
-                color: colorScheme.onSurface.withValues(alpha: 0.3),
-              ),
+              style: const TextStyle(fontSize: 11),
             ),
           ],
-
           const SizedBox(height: AppTheme.spacingXLarge),
-
-          // Action buttons
           if (isHost)
             PrimaryButton(
               label: '再来一次',
@@ -1626,31 +900,53 @@ class _RoomDetailPageState extends State<RoomDetailPage> {
           SecondaryButton(
             label: '查看详情',
             icon: Icons.info_outline,
-            onPressed: () => context.push('/movies/detail/${resultMovie!.id}'),
+            onPressed: () => context.push('/movies/detail/${resultMovie.id}'),
           ),
-          const SizedBox(height: AppTheme.spacingXLarge),
         ],
       ),
     );
   }
 
-  // ==================== Helpers ====================
+  void _showLeaveDialog(RoomProvider roomProvider) {
+    final userId = context.read<UserProvider>().user?.id ?? '';
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('退出房间'),
+        content: const Text('确定要退出当前房间吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              roomProvider.leaveRoom(userId);
+              context.pop();
+            },
+            child: const Text('退出'),
+          ),
+        ],
+      ),
+    );
+  }
 
   void _resetState() {
     _shuffleTimer?.cancel();
     _countdownTimer?.cancel();
-    _animationStarted = false;
-    _animationComplete = false;
+    _syncTimer?.cancel();
     _animCandidates = [];
     _animResult = null;
-    _shuffleCount = 0;
     _displayIndex = 0;
-    _luckyNumberSubmitted = false;
-    _luckyNumberController.clear();
+    _shuffleCount = 0;
     _countdown = 5;
+    _animationStarted = false;
+    _animationComplete = false;
+    _luckySubmitted = false;
     _historySaved = false;
-    _isAutoPopping = false;
-    _selectedMovieIds.clear();
     _selectionSynced = false;
+    _selectedIds.clear();
+    _luckyController.clear();
   }
 }

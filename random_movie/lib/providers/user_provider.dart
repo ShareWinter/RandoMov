@@ -7,25 +7,30 @@ class UserProvider extends ChangeNotifier {
   final StorageService _storageService = StorageService();
 
   LocalUser? _user;
-  bool _isLoading = true;
+  bool _isLoading = false;
+  bool _hasInitialized = false;
   String? _error;
 
   LocalUser? get user => _user;
   bool get isLoading => _isLoading;
   bool get isReady => _user != null;
+  bool get hasInitialized => _hasInitialized;
   String? get error => _error;
 
-  UserProvider() {
-    _init();
-  }
+  UserProvider();
 
-  Future<void> _init() async {
+  Future<void> ensureInitialized() async {
+    if (_hasInitialized || _isLoading) return;
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
     try {
       _user = await _storageService.getOrCreateUser();
-      _isLoading = false;
-      notifyListeners();
     } catch (e) {
       _error = '初始化失败: $e';
+    } finally {
+      _hasInitialized = true;
       _isLoading = false;
       notifyListeners();
     }
@@ -33,6 +38,9 @@ class UserProvider extends ChangeNotifier {
 
   Future<void> updateUserName(String newName) async {
     if (newName.trim().isEmpty) return;
+    await ensureInitialized();
+    if (_user == null) return;
+
     try {
       await _storageService.updateUserName(newName.trim());
       _user = _user?.copyWith(name: newName.trim());

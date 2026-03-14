@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -11,60 +10,124 @@ import 'package:random_movie/providers/providers.dart';
 import 'package:random_movie/widgets/common/common_widgets.dart';
 
 /// 抽奖历史页面
-class DrawHistoryPage extends StatelessWidget {
+class DrawHistoryPage extends StatefulWidget {
   const DrawHistoryPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return GlassAppBarDecorator(
-      child: Scaffold(
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          title: const Text('抽奖历史'),
-          actions: [
-            Consumer<DrawHistoryProvider>(
-              builder: (context, provider, _) {
-                if (provider.records.isEmpty) return const SizedBox.shrink();
-                return IconButton(
-                  icon: const Icon(Icons.delete_sweep_outlined),
-                  onPressed: () => _confirmClear(context, provider),
-                );
-              },
-            ),
-          ],
-        ),
-        body: Consumer<DrawHistoryProvider>(
-          builder: (context, provider, _) {
-            if (provider.records.isEmpty) {
-              return const EmptyState(
-                title: '还没有抽奖记录',
-                subtitle: '去抽一次片吧',
-                icon: Icons.casino_outlined,
-              );
-            }
+  State<DrawHistoryPage> createState() => _DrawHistoryPageState();
+}
 
-            return ListView.separated(
-              padding: EdgeInsets.only(
-                top:
-                    MediaQuery.of(context).padding.top + AppTheme.spacingMedium,
-                left: AppTheme.spacingMedium,
-                right: AppTheme.spacingMedium,
-                bottom: AppTheme.spacingXLarge * 3,
-              ),
-              itemCount: provider.records.length,
-              separatorBuilder: (_, __) =>
-                  const SizedBox(height: AppTheme.spacingMedium),
-              itemBuilder: (context, index) {
-                return _DrawHistoryCard(
-                  record: provider.records[index],
-                  onTap: () => context.push(
-                    '/movies/detail/${provider.records[index].movieId}',
+class _DrawHistoryPageState extends State<DrawHistoryPage> {
+  final ScrollController _scrollController = ScrollController();
+  bool _requestedInitialLoad = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_handleScroll);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_requestedInitialLoad) return;
+    _requestedInitialLoad = true;
+    context.read<DrawHistoryProvider>().ensureLoaded();
+  }
+
+  @override
+  void dispose() {
+    _scrollController
+      ..removeListener(_handleScroll)
+      ..dispose();
+    super.dispose();
+  }
+
+  void _handleScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 240) {
+      context.read<DrawHistoryProvider>().loadMore();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('抽奖历史'),
+        actions: [
+          Consumer<DrawHistoryProvider>(
+            builder: (context, provider, _) {
+              if (provider.records.isEmpty) return const SizedBox.shrink();
+              return IconButton(
+                icon: const Icon(Icons.delete_sweep_outlined),
+                onPressed: () => _confirmClear(context, provider),
+              );
+            },
+          ),
+        ],
+      ),
+      body: Consumer<DrawHistoryProvider>(
+        builder: (context, provider, _) {
+          final records = provider.records;
+
+          if (provider.isLoading && records.isEmpty) {
+            return const LoadingState(message: '加载中...');
+          }
+
+          if (provider.error != null && records.isEmpty) {
+            return ErrorState(
+              message: provider.error!,
+              onRetry: provider.refresh,
+            );
+          }
+
+          if (records.isEmpty) {
+            return const EmptyState(
+              title: '还没有抽奖记录',
+              subtitle: '去抽一次片吧',
+              icon: Icons.casino_outlined,
+            );
+          }
+
+          final itemCount = provider.hasMore || provider.isLoadingMore
+              ? records.length + 1
+              : records.length;
+
+          return ListView.separated(
+            key: const PageStorageKey('draw-history-list'),
+            controller: _scrollController,
+            cacheExtent: MediaQuery.of(context).size.height * 1.5,
+            padding: const EdgeInsets.only(
+              top: AppTheme.spacingMedium,
+              left: AppTheme.spacingMedium,
+              right: AppTheme.spacingMedium,
+              bottom: AppTheme.spacingXLarge * 3,
+            ),
+            itemCount: itemCount,
+            separatorBuilder: (_, __) =>
+                const SizedBox(height: AppTheme.spacingMedium),
+            itemBuilder: (context, index) {
+              if (index >= records.length) {
+                return const Padding(
+                  padding: EdgeInsets.symmetric(
+                    vertical: AppTheme.spacingLarge,
+                  ),
+                  child: Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 );
-              },
-            );
-          },
-        ),
+              }
+
+              final record = records[index];
+              return _DrawHistoryCard(
+                record: record,
+                onTap: () => context.push('/movies/detail/${record.movieId}'),
+              );
+            },
+          );
+        },
       ),
     );
   }
@@ -74,68 +137,62 @@ class DrawHistoryPage extends StatelessWidget {
 
     showDialog(
       context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.3),
-      builder: (ctx) => BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-        child: AlertDialog(
-          backgroundColor: isDark
-              ? const Color(0xCC1A1A2E)
-              : const Color(0xCCFFFFFF),
-          elevation: 24,
-          shadowColor: Colors.black.withValues(alpha: 0.4),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-            side: BorderSide(
-              color: isDark ? const Color(0x1AFFFFFF) : const Color(0x14000000),
-              width: 1,
-            ),
+      barrierColor: Colors.black.withValues(alpha: 0.5),
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: isDark ? const Color(0xFF222240) : Colors.white,
+        elevation: 24,
+        shadowColor: Colors.black.withValues(alpha: 0.4),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+          side: BorderSide(
+            color: isDark ? const Color(0x1AFFFFFF) : const Color(0x14000000),
+            width: 1,
           ),
-          title: Text(
-            '清空历史',
-            style: TextStyle(
-              fontWeight: FontWeight.bold,
-              color: isDark ? Colors.white : AppTheme.textPrimaryDarkOnLight,
-            ),
-          ),
-          content: Text(
-            '确定要清空所有抽奖记录吗？此操作不可恢复。',
-            style: TextStyle(
-              color: isDark
-                  ? AppTheme.textSecondary
-                  : AppTheme.textSecondaryDarkOnLight,
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: Text(
-                '取消',
-                style: TextStyle(
-                  color: isDark
-                      ? AppTheme.textSecondary
-                      : AppTheme.textSecondaryDarkOnLight,
-                ),
-              ),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                provider.clearAll();
-              },
-              style: TextButton.styleFrom(foregroundColor: AppTheme.accent),
-              child: const Text(
-                '清空',
-                style: TextStyle(fontWeight: FontWeight.bold),
-              ),
-            ),
-          ],
         ),
+        title: Text(
+          '清空历史',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: isDark ? Colors.white : AppTheme.textPrimaryDarkOnLight,
+          ),
+        ),
+        content: Text(
+          '确定要清空所有抽奖记录吗？此操作不可恢复。',
+          style: TextStyle(
+            color: isDark
+                ? AppTheme.textSecondary
+                : AppTheme.textSecondaryDarkOnLight,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text(
+              '取消',
+              style: TextStyle(
+                color: isDark
+                    ? AppTheme.textSecondary
+                    : AppTheme.textSecondaryDarkOnLight,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              provider.clearAll();
+            },
+            style: TextButton.styleFrom(foregroundColor: AppTheme.accent),
+            child: const Text(
+              '清空',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-/// 抽奖历史卡片
 class _DrawHistoryCard extends StatefulWidget {
   final DrawRecord record;
   final VoidCallback? onTap;
@@ -167,7 +224,7 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
           : null,
       onTap: widget.onTap,
       child: AnimatedScale(
-        scale: _pressed ? 0.97 : 1.0,
+        scale: _pressed ? 0.98 : 1.0,
         duration: const Duration(milliseconds: 120),
         curve: Curves.easeInOut,
         child: Container(
@@ -181,16 +238,16 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
               ),
             ],
           ),
-          child: GlassContainer(
+          child: SoftContainer(
             padding: const EdgeInsets.all(12),
-            blurSigma: 18,
             borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-            child: IntrinsicHeight(
+            child: SizedBox(
+              height: 100,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Poster
                   ClipRRect(
+                    clipBehavior: Clip.hardEdge,
                     borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
                     child: SizedBox(
                       width: 72,
@@ -200,15 +257,18 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
                               imageUrl: record.moviePoster,
                               httpHeaders: ApiConfig.imageHeaders,
                               fit: BoxFit.cover,
-                              placeholder: (_, __) => Container(
+                              memCacheWidth: 160,
+                              maxWidthDiskCache: 160,
+                              fadeInDuration: Duration.zero,
+                              placeholder: (_, __) => ColoredBox(
                                 color: colorScheme.surfaceContainerHighest,
                               ),
-                              errorWidget: (_, __, ___) => Container(
+                              errorWidget: (_, __, ___) => ColoredBox(
                                 color: colorScheme.surfaceContainerHighest,
                                 child: const Icon(Icons.movie, size: 24),
                               ),
                             )
-                          : Container(
+                          : ColoredBox(
                               color: colorScheme.surfaceContainerHighest,
                               child: Icon(
                                 Icons.movie,
@@ -220,15 +280,11 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
                             ),
                     ),
                   ),
-
                   const SizedBox(width: 14),
-
-                  // Info
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Row 1: title + mode badge
                         Row(
                           children: [
                             Expanded(
@@ -270,10 +326,7 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
                             ),
                           ],
                         ),
-
                         const SizedBox(height: 12),
-
-                        // Row 2: date + candidate count
                         Row(
                           children: [
                             Icon(
@@ -297,10 +350,7 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
                             ),
                           ],
                         ),
-
                         const SizedBox(height: 8),
-
-                        // Row 3: participants + candidates
                         Row(
                           children: [
                             Icon(
@@ -330,7 +380,7 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
                             ),
                             const SizedBox(width: 5),
                             Text(
-                              '共 ${record.candidateCount} 部参选',
+                              '共 ${record.candidateCount} 部参与',
                               style: TextStyle(
                                 fontSize: 13,
                                 color: colorScheme.onSurface.withValues(
@@ -343,8 +393,6 @@ class _DrawHistoryCardState extends State<_DrawHistoryCard> {
                       ],
                     ),
                   ),
-
-                  // Chevron
                   Padding(
                     padding: const EdgeInsets.only(left: 4),
                     child: Icon(

@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:random_movie/config/app_theme.dart';
 
@@ -7,7 +6,7 @@ import 'package:random_movie/config/app_theme.dart';
 /// Toast type determines icon and color scheme
 enum ToastType { success, error, info }
 
-/// Themed floating toast — matches the app's glassmorphism style.
+/// Themed floating toast — matches the app's soft skeuomorphism style.
 ///
 /// Usage:
 ///   AppToast.success(context, '保存成功');
@@ -26,9 +25,13 @@ class AppToast {
     final messenger = ScaffoldMessenger.of(context);
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final (icon, iconColor) = _iconFor(type, isDark);
-    final textColor = isDark ? AppTheme.textPrimary : AppTheme.textPrimaryDarkOnLight;
+    final textColor = isDark
+        ? AppTheme.textPrimary
+        : AppTheme.textPrimaryDarkOnLight;
     final bgColor = isDark ? const Color(0xF0222240) : const Color(0xF0FFFFFF);
-    final borderColor = isDark ? const Color(0x1AFFFFFF) : const Color(0x14000000);
+    final borderColor = isDark
+        ? const Color(0x1AFFFFFF)
+        : const Color(0x14000000);
 
     // Delay so any dialog pop() animation completes first.
     Future.delayed(const Duration(milliseconds: 500), () {
@@ -70,20 +73,32 @@ class AppToast {
     });
   }
 
-  static void success(BuildContext context, String message, {Duration? duration}) =>
-      show(context, message, type: ToastType.success, duration: duration);
+  static void success(
+    BuildContext context,
+    String message, {
+    Duration? duration,
+  }) => show(context, message, type: ToastType.success, duration: duration);
 
-  static void error(BuildContext context, String message, {Duration? duration}) =>
-      show(context, message, type: ToastType.error, duration: duration);
+  static void error(
+    BuildContext context,
+    String message, {
+    Duration? duration,
+  }) => show(context, message, type: ToastType.error, duration: duration);
 
-  static void info(BuildContext context, String message, {Duration? duration}) =>
-      show(context, message, type: ToastType.info, duration: duration);
+  static void info(
+    BuildContext context,
+    String message, {
+    Duration? duration,
+  }) => show(context, message, type: ToastType.info, duration: duration);
 
   static (IconData, Color) _iconFor(ToastType type, bool isDark) {
     return switch (type) {
-      ToastType.success => (Icons.check_circle_rounded, const Color(0xFF4CAF50)),
-      ToastType.error   => (Icons.error_rounded, AppTheme.accent),
-      ToastType.info    => (
+      ToastType.success => (
+        Icons.check_circle_rounded,
+        const Color(0xFF4CAF50),
+      ),
+      ToastType.error => (Icons.error_rounded, AppTheme.accent),
+      ToastType.info => (
         Icons.info_rounded,
         isDark ? const Color(0xB3FFFFFF) : const Color(0x99101218),
       ),
@@ -91,22 +106,23 @@ class AppToast {
   }
 }
 
-// ==================== Glass Containers ====================
+// ==================== Soft Containers ====================
 
-/// iOS 风格毛玻璃容器
-class GlassContainer extends StatelessWidget {
+/// Light skeuomorphism container — solid background with subtle shadow.
+/// Replaces the old GlassContainer (BackdropFilter) for better performance.
+class SoftContainer extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double? width;
   final double? height;
   final BorderRadius? borderRadius;
-  final double blurSigma;
   final Color? color;
   final Border? border;
   final bool showBorder;
+  final bool showShadow;
 
-  const GlassContainer({
+  const SoftContainer({
     super.key,
     required this.child,
     this.padding,
@@ -114,106 +130,65 @@ class GlassContainer extends StatelessWidget {
     this.width,
     this.height,
     this.borderRadius,
-    this.blurSigma = 18,
     this.color,
     this.border,
     this.showBorder = true,
+    this.showShadow = true,
   });
 
   @override
   Widget build(BuildContext context) {
     final brightness = Theme.of(context).brightness;
     final radius = borderRadius ?? BorderRadius.circular(AppTheme.radiusLarge);
-    final effectiveColor = color ?? (brightness == Brightness.dark
-        ? const Color(0x26FFFFFF)
-        : const Color(0xCCFFFFFF));
-    
-    final effectiveBorder = showBorder 
-        ? (border ?? Border.all(
-            color: brightness == Brightness.dark
-                ? const Color(0x1AFFFFFF)
-                : const Color(0x14000000),
-            width: 1,
-          ))
-        : null;
+    final isDark = brightness == Brightness.dark;
+    final effectiveColor =
+        color ?? (isDark ? AppTheme.surfaceSoft : AppTheme.surfaceSoftLight);
 
-    return ClipRRect(
-      borderRadius: radius,
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-        child: Container(
-          width: width,
-          height: height,
-          margin: margin,
-          padding: padding ?? const EdgeInsets.all(AppTheme.spacingMedium),
-          decoration: BoxDecoration(
-            color: effectiveColor,
-            borderRadius: radius,
-            border: effectiveBorder,
-          ),
-          child: child,
-        ),
-      ),
-    );
-  }
-}
-
-/// iOS 风格吸顶导航栏装饰
-class GlassAppBarDecorator extends StatelessWidget {
-  final Widget child;
-  final double blurSigma;
-
-  const GlassAppBarDecorator({
-    super.key,
-    required this.child,
-    this.blurSigma = 20,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final topPadding = MediaQuery.of(context).padding.top;
-    final appBarHeight = kToolbarHeight;
-    final totalHeight = topPadding + appBarHeight;
-
-    return Stack(
-      children: [
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          height: totalHeight,
-          child: GlassContainer(
-            borderRadius: BorderRadius.zero,
-            blurSigma: blurSigma,
-            padding: EdgeInsets.zero,
-            showBorder: false,
-            border: Border(
-              bottom: BorderSide(
-                color: Theme.of(context).brightness == Brightness.dark
+    final effectiveBorder = showBorder
+        ? (border ??
+              Border.all(
+                color: isDark
                     ? const Color(0x1AFFFFFF)
                     : const Color(0x14000000),
-                width: 0.5,
-              ),
-            ),
-            child: const SizedBox.expand(),
-          ),
-        ),
-        child,
-      ],
+                width: 1,
+              ))
+        : null;
+
+    return Container(
+      width: width,
+      height: height,
+      margin: margin,
+      padding: padding ?? const EdgeInsets.all(AppTheme.spacingMedium),
+      decoration: BoxDecoration(
+        color: effectiveColor,
+        borderRadius: radius,
+        border: effectiveBorder,
+        boxShadow: showShadow
+            ? [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.08),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ]
+            : null,
+      ),
+      child: child,
     );
   }
 }
 
-/// 毛玻璃卡片组件
-class GlassCard extends StatelessWidget {
+/// Light skeuomorphism card — wraps SoftContainer with optional tap
+class SoftCard extends StatelessWidget {
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final double? width;
   final double? height;
   final VoidCallback? onTap;
+  final bool showShadow;
 
-  const GlassCard({
+  const SoftCard({
     super.key,
     required this.child,
     this.padding,
@@ -221,15 +196,17 @@ class GlassCard extends StatelessWidget {
     this.width,
     this.height,
     this.onTap,
+    this.showShadow = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    Widget card = GlassContainer(
+    Widget card = SoftContainer(
       width: width,
       height: height,
       padding: padding,
       margin: margin,
+      showShadow: showShadow,
       child: child,
     );
 
@@ -283,7 +260,9 @@ class PrimaryButton extends StatelessWidget {
                 height: 20,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(colorScheme.onPrimary),
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    colorScheme.onPrimary,
+                  ),
                 ),
               )
             : Row(
@@ -323,9 +302,7 @@ class SecondaryButton extends StatelessWidget {
       onPressed: onPressed,
       style: OutlinedButton.styleFrom(
         foregroundColor: onSurface,
-        side: BorderSide(
-          color: onSurface.withValues(alpha: 0.25),
-        ),
+        side: BorderSide(color: onSurface.withValues(alpha: 0.25)),
         padding: const EdgeInsets.symmetric(
           horizontal: AppTheme.spacingMedium,
           vertical: AppTheme.spacingSmall,
@@ -380,10 +357,7 @@ class EmptyState extends StatelessWidget {
             const SizedBox(height: AppTheme.spacingMedium),
             Text(
               title,
-              style: const TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
               textAlign: TextAlign.center,
             ),
             if (subtitle != null) ...[
@@ -396,10 +370,7 @@ class EmptyState extends StatelessWidget {
             ],
             if (onAction != null && actionLabel != null) ...[
               const SizedBox(height: AppTheme.spacingLarge),
-              PrimaryButton(
-                label: actionLabel!,
-                onPressed: onAction,
-              ),
+              PrimaryButton(label: actionLabel!, onPressed: onAction),
             ],
           ],
         ),
@@ -427,10 +398,7 @@ class LoadingState extends StatelessWidget {
           ),
           if (message != null) ...[
             const SizedBox(height: AppTheme.spacingMedium),
-            Text(
-              message!,
-              style: textTheme.bodyMedium,
-            ),
+            Text(message!, style: textTheme.bodyMedium),
           ],
         ],
       ),
@@ -443,11 +411,7 @@ class ErrorState extends StatelessWidget {
   final String message;
   final VoidCallback? onRetry;
 
-  const ErrorState({
-    super.key,
-    required this.message,
-    this.onRetry,
-  });
+  const ErrorState({super.key, required this.message, this.onRetry});
 
   @override
   Widget build(BuildContext context) {
@@ -459,11 +423,7 @@ class ErrorState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.error_outline,
-              size: 48,
-              color: colorScheme.error,
-            ),
+            Icon(Icons.error_outline, size: 48, color: colorScheme.error),
             const SizedBox(height: AppTheme.spacingMedium),
             Text(
               message,

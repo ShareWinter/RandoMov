@@ -5,7 +5,7 @@ import 'package:random_movie/config/app_theme.dart';
 import 'package:random_movie/models/movie.dart';
 import 'package:random_movie/widgets/common/common_widgets.dart';
 
-/// 影片卡片组件（带点击缩放动效）
+/// 电影卡片组件，带点击缩放动效
 class MovieCard extends StatefulWidget {
   final Movie movie;
   final VoidCallback? onTap;
@@ -26,175 +26,206 @@ class MovieCard extends StatefulWidget {
 
 class _MovieCardState extends State<MovieCard> {
   bool _isPressed = false;
+  bool _posterReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _syncPosterState();
+  }
+
+  @override
+  void didUpdateWidget(covariant MovieCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.movie.poster == widget.movie.poster) return;
+    _syncPosterState();
+  }
+
+  void _syncPosterState() {
+    _posterReady = widget.movie.poster.isEmpty;
+    if (!_posterReady) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          _posterReady = true;
+        });
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     final movie = widget.movie;
+    final isSeries = movie.subjectType == MovieSubjectType.tvSeries;
+    final totalEpisodes = movie.episodes.length;
+    final watchedEpisodes = movie.episodes
+        .where((episode) => episode.watched)
+        .length;
+    final hasEpisodeProgress = isSeries && totalEpisodes > 0;
+    final progressValue = hasEpisodeProgress
+        ? watchedEpisodes / totalEpisodes
+        : 0.0;
+    final statusLabel = hasEpisodeProgress
+        ? '$watchedEpisodes/$totalEpisodes'
+        : (movie.watched ? '已看' : '未看');
+    final statusBackground = hasEpisodeProgress
+        ? (watchedEpisodes == totalEpisodes
+              ? colorScheme.primary
+              : Colors.black.withValues(alpha: 0.66))
+        : (movie.watched
+              ? colorScheme.primary
+              : Colors.black.withValues(alpha: 0.66));
 
-    return GestureDetector(
-      onTapDown: widget.onTap != null
-          ? (_) => setState(() => _isPressed = true)
-          : null,
-      onTapUp: widget.onTap != null
-          ? (_) => setState(() => _isPressed = false)
-          : null,
-      onTapCancel: widget.onTap != null
-          ? () => setState(() => _isPressed = false)
-          : null,
-      onTap: widget.onTap,
-      child: AnimatedScale(
-        scale: _isPressed ? 0.95 : 1.0,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeInOut,
-        child: Container(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.15),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
-              ),
-              BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.2 : 0.08),
-                blurRadius: 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: GlassContainer(
+    return RepaintBoundary(
+      child: GestureDetector(
+        onTapDown: widget.onTap != null
+            ? (_) => setState(() => _isPressed = true)
+            : null,
+        onTapUp: widget.onTap != null
+            ? (_) => setState(() => _isPressed = false)
+            : null,
+        onTapCancel: widget.onTap != null
+            ? () => setState(() => _isPressed = false)
+            : null,
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _isPressed ? 0.975 : 1.0,
+          duration: const Duration(milliseconds: 90),
+          curve: Curves.easeOut,
+          child: SoftContainer(
             padding: const EdgeInsets.all(8),
-            blurSigma: 20,
             borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
+            showShadow: false,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Poster
                 Expanded(
                   child: ClipRRect(
+                    clipBehavior: Clip.hardEdge,
                     borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
                     child: Stack(
                       fit: StackFit.expand,
                       children: [
-                        if (movie.poster.isNotEmpty)
+                        if (movie.poster.isNotEmpty && _posterReady)
                           CachedNetworkImage(
                             imageUrl: movie.poster,
                             httpHeaders: ApiConfig.imageHeaders,
                             fit: BoxFit.cover,
-                            placeholder: (context, url) => Container(
+                            memCacheWidth: 280,
+                            maxWidthDiskCache: 280,
+                            fadeInDuration: Duration.zero,
+                            placeholder: (_, __) => ColoredBox(
                               color: colorScheme.surfaceContainerHighest,
                             ),
-                            errorWidget: (context, url, error) => Container(
+                            errorWidget: (_, __, ___) => ColoredBox(
                               color: colorScheme.surfaceContainerHighest,
                               child: const Icon(Icons.movie, size: 32),
                             ),
                           )
                         else
-                          Container(
+                          ColoredBox(
                             color: colorScheme.surfaceContainerHighest,
                             child: Icon(
                               Icons.movie,
                               size: 32,
-                              color: colorScheme.onSurface.withValues(alpha: 0.38),
+                              color: colorScheme.onSurface.withValues(
+                                alpha: 0.38,
+                              ),
                             ),
                           ),
-
-                        // Watched badge
                         if (widget.showWatchedBadge)
                           Positioned(
                             top: 6,
                             left: 6,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            child: DecoratedBox(
                               decoration: BoxDecoration(
-                                color: movie.watched
-                                    ? colorScheme.primary
-                                    : Colors.black.withValues(alpha: 0.7),
+                                color: statusBackground,
                                 borderRadius: BorderRadius.circular(6),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.3),
-                                    blurRadius: 4,
-                                  ),
-                                ],
                               ),
-                              child: Text(
-                                movie.watched ? '已看' : '未看',
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  shadows: [
-                                    Shadow(color: Colors.black54, blurRadius: 2),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (hasEpisodeProgress) ...[
+                                      const Icon(
+                                        Icons.tv_rounded,
+                                        size: 13,
+                                        color: Colors.white,
+                                      ),
+                                      const SizedBox(width: 4),
+                                    ],
+                                    Text(
+                                      statusLabel,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
                                   ],
                                 ),
                               ),
                             ),
                           ),
-
-                        // Rating
                         if (movie.rating > 0)
                           Positioned(
                             top: 6,
                             right: 6,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            child: DecoratedBox(
                               decoration: BoxDecoration(
-                                color: Colors.black.withValues(alpha: 0.7),
+                                color: Colors.black.withValues(alpha: 0.66),
                                 borderRadius: BorderRadius.circular(6),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.3),
-                                    blurRadius: 4,
-                                  ),
-                                ],
                               ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.star, size: 14, color: Colors.amber),
-                                  const SizedBox(width: 3),
-                                  Text(
-                                    movie.rating.toStringAsFixed(1),
-                                    style: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.bold,
-                                      color: Colors.white,
-                                      shadows: [
-                                        Shadow(color: Colors.black54, blurRadius: 2),
-                                      ],
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      Icons.star,
+                                      size: 14,
+                                      color: Colors.amber,
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      movie.rating.toStringAsFixed(1),
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-
-                        // Delete button
                         if (widget.onDelete != null)
                           Positioned(
                             bottom: 6,
                             right: 6,
                             child: GestureDetector(
                               onTap: widget.onDelete,
-                              child: Container(
-                                padding: const EdgeInsets.all(6),
+                              child: DecoratedBox(
                                 decoration: BoxDecoration(
-                                  color: Colors.black.withValues(alpha: 0.7),
+                                  color: Colors.black.withValues(alpha: 0.66),
                                   borderRadius: BorderRadius.circular(8),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: Colors.black.withValues(alpha: 0.3),
-                                      blurRadius: 4,
-                                    ),
-                                  ],
                                 ),
-                                child: const Icon(
-                                  Icons.delete_outline,
-                                  size: 18,
-                                  color: AppTheme.accent,
+                                child: const Padding(
+                                  padding: EdgeInsets.all(6),
+                                  child: Icon(
+                                    Icons.delete_outline,
+                                    size: 18,
+                                    color: AppTheme.accent,
+                                  ),
                                 ),
                               ),
                             ),
@@ -203,10 +234,7 @@ class _MovieCardState extends State<MovieCard> {
                     ),
                   ),
                 ),
-
                 const SizedBox(height: 8),
-
-                // Title and year
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 2),
                   child: Column(
@@ -226,12 +254,32 @@ class _MovieCardState extends State<MovieCard> {
                       if (movie.year.isNotEmpty)
                         Text(
                           movie.year,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
-                            color: colorScheme.onSurface.withValues(alpha: 0.7),
+                            color: colorScheme.onSurface.withValues(
+                              alpha: 0.7,
+                            ),
                           ),
                         ),
+                      if (hasEpisodeProgress) ...[
+                        const SizedBox(height: 6),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value: progressValue,
+                            minHeight: 6,
+                            backgroundColor: colorScheme.onSurface.withValues(
+                              alpha: 0.10,
+                            ),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),

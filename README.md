@@ -1,61 +1,85 @@
-# 随影 (RandoMov)
+# 随影 · RandoMov
 
-> 多人协作选片抽奖应用 — 不知道看什么？让命运来决定！
+<p align="center">
+  <img src="https://img.shields.io/badge/Flutter-3.x-02569B?logo=flutter&logoColor=white" alt="Flutter">
+  <img src="https://img.shields.io/badge/Dart-3.10-0175C2?logo=dart&logoColor=white" alt="Dart">
+  <img src="https://img.shields.io/badge/State-Provider-7B61FF" alt="Provider">
+  <img src="https://img.shields.io/badge/Storage-SQLite%20%2B%20SharedPreferences-0F7B0F" alt="Storage">
+  <img src="https://img.shields.io/badge/Backend-Node.js%20%2B%20Socket.IO-111827" alt="Backend">
+</p>
 
-## 功能概览
+> 一个面向个人与多人观影场景的随机选片应用。  
+> 维护本地片库、抓取豆瓣信息、单人随机抽片、多人房间同步抽奖，把“不知道看什么”这件事交给命运。
 
-- **本地片库** — 通过豆瓣链接或手动方式添加影片，管理个人观影库
-- **单人抽奖** — 从片库中随机抽取一部影片
-- **多人房间** — 创建/加入房间，房主选片，所有人同步观看抽奖动画
-- **幸运数字** — 每位参与者提交幸运数字，影响抽奖结果的种子
-- **观影记录** — 追踪个人观影历史和房间抽奖历史
+## 目录
 
-## 下载地址
-https://github.com/ShareWinter/RandoMov/releases
+- [功能特性](#功能特性)
+- [技术栈](#技术栈)
+- [项目结构](#项目结构)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [使用流程](#使用流程)
+- [架构说明](#架构说明)
+- [常用命令](#常用命令)
+- [发布下载](#发布下载)
+- [注意事项](#注意事项)
+
+## 功能特性
+
+- **本地片库管理**：支持手动添加、豆瓣单片链接抓取、豆列批量导入。
+- **影片详情记录**：支持已看状态、分集进度、个人评分、个人短评、观影日期。
+- **单人抽片**：从本地片库中快速随机抽取一部影片。
+- **多人房间协作**：创建/加入房间，房主选片，所有成员实时同步状态。
+- **幸运数字抽奖**：参与者提交幸运数字，共同影响抽奖种子。
+- **抽奖历史**：本地保存单人抽奖和房间抽奖结果，支持分页查看与清空。
+- **性能优化**：针对片库列表、详情页打开、冷启动首屏做过专项优化。
 
 ## 技术栈
 
 | 层级 | 技术 |
-|------|------|
-| 移动端 | Flutter 3.10+ / Dart |
-| 状态管理 | Provider (ChangeNotifier) |
-| 路由 | go_router |
-| 后端 | Node.js + Express + Socket.IO |
-| 本地存储 | SharedPreferences |
-| 网络请求 | Dio (HTTP) + socket_io_client (WebSocket) |
+| --- | --- |
+| 客户端 | Flutter / Dart |
+| 状态管理 | Provider (`ChangeNotifier`) |
+| 路由 | `go_router` |
+| 网络 | `dio`、`socket_io_client` |
+| 本地存储 | `sqflite`、`shared_preferences` |
+| 图片加载 | `cached_network_image` |
+| HTML 解析 | `html` |
+| 后端 | Node.js、Express、Socket.IO |
 
 ## 项目结构
 
-```
+```text
 RandoMov/
-├── backend/                    # Node.js 后端服务
-│   ├── server.js              # 服务器入口（房间管理 + Socket 事件）
-│   └── package.json
-├── random_movie/              # Flutter 移动应用
-│   ├── lib/
-│   │   ├── config/            # API 地址、主题配置
-│   │   ├── models/            # 数据模型（Movie, Room, Participant...）
-│   │   ├── services/          # HTTP、Socket、本地存储、豆瓣爬取
-│   │   ├── providers/         # 业务状态管理
-│   │   ├── pages/             # 页面（片库、房间、观影历史）
-│   │   ├── widgets/           # 可复用 UI 组件
-│   │   ├── router/            # go_router 路由配置
-│   │   └── icon/              # 应用图标
-│   ├── android/               # Android 原生配置
-│   └── pubspec.yaml
-└── CLAUDE.md                  # AI 开发指南
+├─ backend/                      # 房间服务与 Socket.IO 服务
+│  ├─ package.json
+│  └─ server.js
+├─ random_movie/                 # Flutter 应用
+│  ├─ lib/
+│  │  ├─ config/                 # API、主题、环境配置
+│  │  ├─ models/                 # Movie / Room / DrawRecord 等模型
+│  │  ├─ providers/              # 业务状态管理
+│  │  ├─ services/               # API、Socket、本地存储、豆瓣抓取
+│  │  ├─ pages/                  # 片库 / 房间 / 观影历史 / 抽奖历史
+│  │  ├─ widgets/                # 通用组件与业务组件
+│  │  ├─ router/                 # 路由与底部导航
+│  │  └─ icon/                   # 应用图标资源
+│  ├─ android/
+│  └─ pubspec.yaml
+├─ CLAUDE.md
+└─ README.md
 ```
 
 ## 快速开始
 
-### 环境要求
+### 1. 环境要求
 
-- **Flutter** >= 3.10（含 Dart SDK）
-- **Node.js** >= 18
-- **Android Studio** 或 **VS Code**（含 Flutter 插件）
-- Android 设备/模拟器（API 28+）
+- Node.js `>= 18`
+- 与 `random_movie/pubspec.yaml` 中 Dart `3.10.7` 兼容的 Flutter SDK
+- Android Studio / VS Code（安装 Flutter 与 Dart 插件）
+- Android 设备或模拟器
 
-### 1. 启动后端
+### 2. 启动后端
 
 ```bash
 cd backend
@@ -63,20 +87,35 @@ npm install
 npm run dev
 ```
 
-后端默认运行在 `http://localhost:3000`，可通过环境变量 `PORT` 修改。
+默认监听：
 
-### 2. 配置 API 地址
+- `http://localhost:3000`
 
-编辑 `random_movie/lib/config/api_config.dart`，将 `devBaseUrl` 和 `devSocketUrl` 设为后端实际地址：
+健康检查：
+
+```bash
+curl http://localhost:3000/health
+```
+
+### 3. 配置客户端地址
+
+编辑 `random_movie/lib/config/api_config.dart`：
 
 ```dart
 static const String devBaseUrl = 'http://<你的IP>:3000';
 static const String devSocketUrl = 'http://<你的IP>:3000';
+
+static const String prodBaseUrl = 'http://<你的IP>:3000';
+static const String prodSocketUrl = 'http://<你的IP>:3000';
 ```
 
-> 模拟器访问本机后端请使用 `10.0.2.2`（Android 模拟器）。
+Android 模拟器访问宿主机时，通常使用：
 
-### 3. 运行 Flutter 应用
+```text
+10.0.2.2
+```
+
+### 4. 运行 Flutter 应用
 
 ```bash
 cd random_movie
@@ -84,120 +123,158 @@ flutter pub get
 flutter run
 ```
 
-## 自行部署
+## 配置说明
 
-### 后端部署
+### API 地址
 
-后端为无状态内存服务（无数据库依赖），部署非常轻量：
+客户端通过 `random_movie/lib/config/api_config.dart` 切换开发/生产环境地址：
 
-```bash
-# 1. 克隆仓库并安装依赖
-cd backend
-npm install --production
+- `devBaseUrl` / `devSocketUrl`
+- `prodBaseUrl` / `prodSocketUrl`
 
-# 2. 启动服务（推荐使用 pm2）
-npm install -g pm2
-pm2 start server.js --name randomov
-
-# 3. 验证服务
-curl http://localhost:3000/health
-```
-
-**环境变量：**
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `PORT` | `3000` | 服务端口 |
-
-> 注意：房间数据存储在内存中，服务重启后房间会丢失。10 分钟无活动的房间会被自动清理。
-
-### 生产环境构建 APK
+生产环境地址会在 **Release / Product** 构建下自动生效。常用命令：
 
 ```bash
-cd random_movie
-
-# 1. 修改 api_config.dart 中的生产环境地址
-#    prodBaseUrl / prodSocketUrl
-
-# 2. 构建 Release APK
-flutter build apk --dart-define=dart.vm.product=true
-
-# 产物位于 build/app/outputs/flutter-apk/app-release.apk
+flutter run --release
+flutter build apk --release
 ```
 
-### 网络安全配置
+### Android 明文 HTTP
 
-Release APK 需要允许 HTTP 明文流量（如果后端未启用 HTTPS）。项目已在以下文件中配置：
+如果你的后端没有启用 HTTPS，Android 端需要允许明文流量。仓库中已经包含相关配置：
 
-- `android/app/src/main/AndroidManifest.xml` — `usesCleartextTraffic="true"`
-- `android/app/src/main/res/xml/network_security_config.xml` — 允许的域名列表
+- `random_movie/android/app/src/main/AndroidManifest.xml`
+- `random_movie/android/app/src/main/res/xml/network_security_config.xml`
 
-如需修改允许的后端域名，编辑 `network_security_config.xml`：
-
-```xml
-<domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="true">你的服务器IP或域名</domain>
-</domain-config>
-```
+如需更换服务器域名或 IP，请同步更新白名单配置。
 
 ## 使用流程
 
 ### 添加影片
 
-1. 进入「片库」页面，点击右下角「添加」按钮
-2. 粘贴豆瓣电影链接（单部影片 或 豆列），自动抓取影片信息
-3. 也可选择手动输入影片名称
+1. 进入「片库」页面。
+2. 点击右下角「添加」按钮。
+3. 粘贴豆瓣单片链接或豆列链接，等待自动抓取。
+4. 也可以直接手动录入影片信息。
 
 ### 单人抽奖
 
-1. 进入「房间」页面，选择「我一个人」
-2. 从片库中勾选候选影片
-3. 点击「开始抽奖」，观看动画揭晓结果
+1. 进入「房间」页面。
+2. 选择「我一个人」。
+3. 从片库中勾选候选影片。
+4. 开始抽奖并查看动画结果。
 
 ### 多人房间
 
-1. **房主**：选择「创建房间」，获得 6 位房间码，分享给朋友
-2. **成员**：选择「加入房间」，输入房间码加入
-3. **房主选片**：房主从本地片库中选择候选影片，成员实时查看
-4. **开始抽奖**：房主点击「准备抽奖」，所有人进入幸运数字提交阶段
-5. **输入幸运数字**：5 秒内输入 1-99 的数字（超时自动分配）
-6. **同步动画**：所有客户端基于相同种子播放一致的抽奖动画
-7. **查看结果**：揭晓抽中的影片，房主可选择「再来一次」
+1. 房主创建房间并分享 6 位房间码。
+2. 其他成员输入房间码加入。
+3. 房主从本地片库选择候选影片。
+4. 所有人进入幸运数字阶段。
+5. 服务端生成统一种子并广播抽奖动画数据。
+6. 全员看到一致的抽奖结果。
 
-## 常用命令
+### 记录管理
 
-```bash
-# Flutter 相关（在 random_movie/ 目录下执行）
-flutter pub get          # 安装依赖
-flutter run              # 调试运行
-flutter run -d <设备ID>   # 指定设备运行
-flutter analyze          # 代码静态分析
-flutter test             # 运行测试
-flutter build apk        # 构建 Debug APK
-
-# 后端相关（在 backend/ 目录下执行）
-npm install              # 安装依赖
-npm run dev              # 开发模式（文件监听）
-npm start                # 生产模式
-```
+- **观影历史**：查看已标记看过的影片。
+- **抽奖历史**：查看本地保存的单人/房间抽奖记录。
 
 ## 架构说明
 
-### 数据源
+### 数据存储
 
 | 数据 | 存储位置 | 说明 |
-|------|----------|------|
-| 影片库 | 客户端 SharedPreferences | 纯本地，不同步到后端 |
-| 用户信息 | 客户端 SharedPreferences | userId 一次生成不可变，userName 可修改 |
-| 房间状态 | 后端内存 | 服务端权威，通过 Socket 实时推送 |
-| 抽奖历史 | 客户端本地 | 每次抽奖结束后保存到本地 |
+| --- | --- | --- |
+| 用户信息 | `SharedPreferences` | 保存 `userId`、`userName` 等轻量配置 |
+| 影片库 | `SQLite` | 保存影片、分集、观影状态、评分、短评等 |
+| 抽奖历史 | `SQLite` | 保存单人/房间抽奖记录 |
+| 房间状态 | 后端内存 | 房间成员、候选片单、幸运数字、抽奖结果 |
 
-### 通信协议
+### 影片数据来源
 
-- **REST API**：房间创建、验证（POST/GET `/api/rooms`）
-- **WebSocket**：房间内实时状态同步（Socket.IO）
-- **抽奖同步**：服务端广播相同 seed，各客户端用确定性算法计算结果，保证动画一致
+- 单片信息通过 `MovieScraperService` 直接请求并解析豆瓣页面。
+- 豆列通过抓取豆列 HTML 并解析条目列表导入。
+- 海报加载使用 `CachedNetworkImage`，并携带豆瓣 `Referer` 请求头。
+- **当前项目不依赖 WMDB 或其他第三方电影 API。**
 
-## License
+### 客户端与服务端通信
 
-MIT
+#### HTTP 接口
+
+- `GET /health`
+- `POST /api/rooms`
+- `GET /api/rooms?code=<房间码>`
+
+#### Socket.IO 事件
+
+客户端发送：
+
+- `join-room`
+- `leave-room`
+- `update-room-movies`
+- `submit-lucky-number`
+- `start-draw`
+- `reset-room`
+
+服务端广播：
+
+- `room-updated`
+- `draw-started`
+- `draw-result`
+- `room-reset`
+- `room-closed`
+- `error`
+
+### 设计约束
+
+- 房间服务当前是**纯内存实现**，服务重启后房间数据会丢失。
+- 10 分钟无活动的房间会被自动清理。
+- 抽奖动画依赖统一 `seed`，保证所有客户端动画过程一致。
+
+## 常用命令
+
+### Flutter
+
+```bash
+cd random_movie
+
+flutter pub get
+flutter run
+flutter run -d <device-id>
+flutter analyze
+flutter test
+flutter build apk
+```
+
+### Backend
+
+```bash
+cd backend
+
+npm install
+npm run dev
+npm start
+```
+
+## 发布下载
+
+- GitHub Releases：<https://github.com/ShareWinter/RandoMov/releases>
+
+构建 APK：
+
+```bash
+cd random_movie
+flutter build apk --release
+```
+
+输出目录：
+
+```text
+random_movie/build/app/outputs/flutter-apk/
+```
+
+## 注意事项
+
+- 如果客户端连不上后端，先检查 `ApiConfig` 中的地址是否可达。
+- Android 模拟器连接本机后端时，不要直接使用 `localhost`。
+- 如果你修改了后端域名或端口，记得同步检查 Android 网络安全配置。
+- 当前仓库未附带单独的 `LICENSE` 文件，如需开源分发请自行补充协议声明。

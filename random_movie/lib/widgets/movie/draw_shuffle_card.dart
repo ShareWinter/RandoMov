@@ -27,13 +27,14 @@ class DrawShuffleCard extends StatelessWidget {
       key: ValueKey(movie.id + shuffleCount.toString()),
       width: 200,
       height: 320,
-      child: GlassContainer(
+      child: SoftContainer(
         padding: const EdgeInsets.all(8),
         borderRadius: BorderRadius.circular(AppTheme.radiusXLarge),
         child: Column(
           children: [
             Expanded(
               child: ClipRRect(
+                clipBehavior: Clip.hardEdge,
                 borderRadius: BorderRadius.circular(AppTheme.radiusMedium),
                 child: movie.poster.isNotEmpty
                     ? CachedNetworkImage(
@@ -49,9 +50,7 @@ class DrawShuffleCard extends StatelessWidget {
                       )
                     : Container(
                         color: colorScheme.surfaceContainerHighest,
-                        child: const Center(
-                          child: Icon(Icons.movie, size: 48),
-                        ),
+                        child: const Center(child: Icon(Icons.movie, size: 48)),
                       ),
               ),
             ),

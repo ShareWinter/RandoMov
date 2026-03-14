@@ -1,15 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-/// 应用主题配置（暗色 + 毛玻璃风格）
+/// 应用主题配置（暗色 + 轻拟物风格）
 class AppTheme {
   // 核心色彩
   static const Color backgroundLight = Color(0xFFF5F6FA);
   static const Color backgroundLight2 = Color(0xFFEEF0F7);
   static const Color backgroundDark = Color(0xFF1A1A2E);
   static const Color backgroundDarker = Color(0xFF16162A);
-  static const Color surfaceGlass = Color(0x26FFFFFF); // 15% 白色透明度（暗色）
-  static const Color surfaceGlassLight = Color(0xCCFFFFFF); // 80% 白色透明度（亮色）
+  static const Color surfaceSoft = Color(0xFF222240); // solid dark surface
+  static const Color surfaceSoftLight = Color(0xFFFFFFFF); // solid white
   static const Color accent = Color(0xFFE94560);
   static const Color accentLight = Color(0xFFFF6B6B);
   static const Color textPrimary = Color(0xFFFFFFFF);
@@ -31,8 +31,10 @@ class AppTheme {
   static const double spacingLarge = 24;
   static const double spacingXLarge = 32;
 
-  static const SystemUiOverlayStyle overlayStyleLight = SystemUiOverlayStyle.light;
-  static const SystemUiOverlayStyle overlayStyleDark = SystemUiOverlayStyle.dark;
+  static const SystemUiOverlayStyle overlayStyleLight =
+      SystemUiOverlayStyle.light;
+  static const SystemUiOverlayStyle overlayStyleDark =
+      SystemUiOverlayStyle.dark;
 
   /// 亮色主题（跟随系统时使用）
   static ThemeData get lightTheme {
@@ -40,7 +42,7 @@ class AppTheme {
       colorScheme: const ColorScheme.light(
         primary: accent,
         secondary: accentLight,
-        surface: surfaceGlassLight,
+        surface: surfaceSoftLight,
         onPrimary: Colors.white,
         onSurface: textPrimaryDarkOnLight,
       ),
@@ -76,19 +78,16 @@ class AppTheme {
         foregroundColor: Colors.white,
       ),
       cardTheme: CardThemeData(
-        color: surfaceGlassLight,
+        color: surfaceSoftLight,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radiusLarge),
-          side: const BorderSide(
-            color: Color(0x14000000),
-            width: 1,
-          ),
+          side: const BorderSide(color: Color(0x14000000), width: 1),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: surfaceGlassLight,
+        fillColor: surfaceSoftLight,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(radiusMedium),
           borderSide: BorderSide.none,
@@ -122,20 +121,54 @@ class AppTheme {
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: accent,
-        ),
+        style: TextButton.styleFrom(foregroundColor: accent),
       ),
       textTheme: const TextTheme(
-        titleLarge: TextStyle(color: textPrimaryDarkOnLight, fontWeight: FontWeight.w600, fontSize: 20),
-        titleMedium: TextStyle(color: textPrimaryDarkOnLight, fontWeight: FontWeight.w600, fontSize: 16),
-        titleSmall: TextStyle(color: textSecondaryDarkOnLight, fontWeight: FontWeight.w600, fontSize: 14),
-        bodyLarge: TextStyle(color: textPrimaryDarkOnLight, fontSize: 16, height: 1.35),
-        bodyMedium: TextStyle(color: textSecondaryDarkOnLight, fontSize: 14, height: 1.35),
-        bodySmall: TextStyle(color: textSecondaryDarkOnLight, fontSize: 12, height: 1.3),
-        labelLarge: TextStyle(color: textPrimaryDarkOnLight, fontWeight: FontWeight.w600, fontSize: 14),
-        labelMedium: TextStyle(color: textSecondaryDarkOnLight, fontWeight: FontWeight.w600, fontSize: 12),
-        labelSmall: TextStyle(color: textSecondaryDarkOnLight, fontWeight: FontWeight.w600, fontSize: 11),
+        titleLarge: TextStyle(
+          color: textPrimaryDarkOnLight,
+          fontWeight: FontWeight.w600,
+          fontSize: 20,
+        ),
+        titleMedium: TextStyle(
+          color: textPrimaryDarkOnLight,
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
+        ),
+        titleSmall: TextStyle(
+          color: textSecondaryDarkOnLight,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+        bodyLarge: TextStyle(
+          color: textPrimaryDarkOnLight,
+          fontSize: 16,
+          height: 1.35,
+        ),
+        bodyMedium: TextStyle(
+          color: textSecondaryDarkOnLight,
+          fontSize: 14,
+          height: 1.35,
+        ),
+        bodySmall: TextStyle(
+          color: textSecondaryDarkOnLight,
+          fontSize: 12,
+          height: 1.3,
+        ),
+        labelLarge: TextStyle(
+          color: textPrimaryDarkOnLight,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+        labelMedium: TextStyle(
+          color: textSecondaryDarkOnLight,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+        labelSmall: TextStyle(
+          color: textSecondaryDarkOnLight,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
       ),
 
       snackBarTheme: SnackBarThemeData(
@@ -152,7 +185,10 @@ class AppTheme {
           fontWeight: FontWeight.w500,
         ),
         insetPadding: const EdgeInsets.fromLTRB(
-          spacingMedium, spacingSmall, spacingMedium, 88,
+          spacingMedium,
+          spacingSmall,
+          spacingMedium,
+          88,
         ),
       ),
       pageTransitionsTheme: const PageTransitionsTheme(
@@ -171,7 +207,7 @@ class AppTheme {
       colorScheme: const ColorScheme.dark(
         primary: accent,
         secondary: accentLight,
-        surface: surfaceGlass,
+        surface: surfaceSoft,
         onPrimary: textPrimary,
         onSurface: textPrimary,
       ),
@@ -206,19 +242,16 @@ class AppTheme {
         foregroundColor: textPrimary,
       ),
       cardTheme: CardThemeData(
-        color: surfaceGlass,
+        color: surfaceSoft,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(radiusLarge),
-          side: BorderSide(
-            color: const Color(0x1AFFFFFF),
-            width: 1,
-          ),
+          side: BorderSide(color: const Color(0x1AFFFFFF), width: 1),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
-        fillColor: surfaceGlass,
+        fillColor: surfaceSoft,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(radiusMedium),
           borderSide: BorderSide.none,
@@ -252,26 +285,66 @@ class AppTheme {
         ),
       ),
       textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: accentLight,
-        ),
+        style: TextButton.styleFrom(foregroundColor: accentLight),
       ),
       textTheme: const TextTheme(
-        displayLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
-        displayMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.bold),
-        displaySmall: TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
-        headlineLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
-        headlineMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
-        headlineSmall: TextStyle(color: textPrimary, fontWeight: FontWeight.w600),
-        titleLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 20),
-        titleMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 16),
-        titleSmall: TextStyle(color: textSecondary, fontWeight: FontWeight.w600, fontSize: 14),
+        displayLarge: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.bold,
+        ),
+        displayMedium: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.bold,
+        ),
+        displaySmall: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+        ),
+        headlineLarge: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+        ),
+        headlineMedium: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+        ),
+        headlineSmall: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+        ),
+        titleLarge: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 20,
+        ),
+        titleMedium: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
+        ),
+        titleSmall: TextStyle(
+          color: textSecondary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
         bodyLarge: TextStyle(color: textPrimary, fontSize: 16, height: 1.35),
         bodyMedium: TextStyle(color: textSecondary, fontSize: 14, height: 1.35),
         bodySmall: TextStyle(color: textMuted, fontSize: 12, height: 1.3),
-        labelLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 14),
-        labelMedium: TextStyle(color: textSecondary, fontWeight: FontWeight.w600, fontSize: 12),
-        labelSmall: TextStyle(color: textMuted, fontWeight: FontWeight.w600, fontSize: 11),
+        labelLarge: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
+        labelMedium: TextStyle(
+          color: textSecondary,
+          fontWeight: FontWeight.w600,
+          fontSize: 12,
+        ),
+        labelSmall: TextStyle(
+          color: textMuted,
+          fontWeight: FontWeight.w600,
+          fontSize: 11,
+        ),
       ),
 
       snackBarTheme: SnackBarThemeData(
@@ -288,7 +361,10 @@ class AppTheme {
           fontWeight: FontWeight.w500,
         ),
         insetPadding: const EdgeInsets.fromLTRB(
-          spacingMedium, spacingSmall, spacingMedium, 88,
+          spacingMedium,
+          spacingSmall,
+          spacingMedium,
+          88,
         ),
       ),
       iconTheme: const IconThemeData(color: textPrimary),
@@ -303,15 +379,12 @@ class AppTheme {
   }
 }
 
-/// 毛玻璃装饰
-class GlassDecoration {
+/// 轻拟物装饰
+class SoftDecoration {
   static BoxDecoration get card => BoxDecoration(
-    color: AppTheme.surfaceGlass,
+    color: AppTheme.surfaceSoft,
     borderRadius: BorderRadius.circular(AppTheme.radiusLarge),
-    border: Border.all(
-      color: const Color(0x1AFFFFFF),
-      width: 1,
-    ),
+    border: Border.all(color: const Color(0x1AFFFFFF), width: 1),
   );
 
   static BoxDecoration get sheet => BoxDecoration(
@@ -319,9 +392,6 @@ class GlassDecoration {
     borderRadius: const BorderRadius.vertical(
       top: Radius.circular(AppTheme.radiusXLarge),
     ),
-    border: Border.all(
-      color: const Color(0x1AFFFFFF),
-      width: 1,
-    ),
+    border: Border.all(color: const Color(0x1AFFFFFF), width: 1),
   );
 }

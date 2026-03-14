@@ -64,9 +64,9 @@ flutter build apk --dart-define=dart.vm.product=true
 
 `StorageService` is a singleton; call `StorageService()` to get the instance.
 
-### Movie Scraping (Frontend Only, No Backend Proxy)
+### Movie Scraping (Frontend Only)
 
-- **Single movie** (douban `/subject/{id}/` URL): Extract `doubanId` → call `https://api.wmdb.tv/movie/api?id={doubanId}` via Dio
+- **Single movie** (douban `/subject/{id}/` URL): `MovieScraperService` directly请求豆瓣页面并解析结构化数据，不走第三方电影接口，也不走后端代理
 - **Doulist** (douban `/doulist/{id}/` URL): Dio fetch HTML → parse with `html` package → `document.querySelectorAll('.doulist-item')`
 - **Poster images**: `CachedNetworkImage` with `httpHeaders` from `ApiConfig.imageHeaders` (sets `Referer: https://movie.douban.com/`) to bypass hotlink protection
 

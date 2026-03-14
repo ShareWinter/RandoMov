@@ -21,9 +21,6 @@ class ApiConfig {
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 30);
 
-  // 豆瓣爬取相关
-  static const String wmdbApiBase = 'https://api.wmdb.tv';
-
   // 请求头
   static Map<String, String> get defaultHeaders => {
     'User-Agent':
