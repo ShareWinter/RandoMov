@@ -784,8 +784,19 @@ class _MovieDetailPageState extends State<MovieDetailPage> {
 
     await _updateWatchState(provider, movie, () {
       final next = List<MovieEpisode>.from(_episodes);
-      final current = next[index];
-      next[index] = current.copyWith(watched: !current.watched);
+      final willWatch = !next[index].watched;
+
+      if (willWatch) {
+        // Mark this episode and all before it as watched
+        for (var i = 0; i <= index; i++) {
+          next[i] = next[i].copyWith(watched: true);
+        }
+      } else {
+        // Unmark this episode and all after it as unwatched
+        for (var i = index; i < next.length; i++) {
+          next[i] = next[i].copyWith(watched: false);
+        }
+      }
       _episodes = next;
 
       final allWatched =

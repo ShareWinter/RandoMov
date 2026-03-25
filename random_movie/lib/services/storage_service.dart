@@ -312,7 +312,7 @@ class StorageService {
       whereArgs: clause.whereArgs,
       orderBy: watchedOnly
           ? 'COALESCE(watched_at, created_at) DESC, created_at DESC'
-          : 'created_at DESC',
+          : 'watched ASC, created_at DESC',
       limit: limit,
       offset: offset,
     );
@@ -338,7 +338,7 @@ class StorageService {
       whereArgs: clause.whereArgs,
       orderBy: watchedOnly
           ? 'COALESCE(watched_at, created_at) DESC, created_at DESC'
-          : 'created_at DESC',
+          : 'watched ASC, created_at DESC',
     );
     return rows
         .map((row) => row['id']?.toString() ?? '')
