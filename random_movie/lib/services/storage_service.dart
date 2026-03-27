@@ -319,6 +319,24 @@ class StorageService {
     return rows.map(_movieFromDbMap).toList();
   }
 
+  Future<List<Movie>> queryWatchedMoviesByMonth(DateTime month) async {
+    _ensureInitialized();
+
+    final firstDay = DateTime(month.year, month.month);
+    final nextMonth = DateTime(month.year, month.month + 1);
+    final rows = await _db.query(
+      _moviesTable,
+      where:
+          'watched = 1 AND COALESCE(watched_at, created_at) >= ? AND COALESCE(watched_at, created_at) < ?',
+      whereArgs: [
+        firstDay.toIso8601String(),
+        nextMonth.toIso8601String(),
+      ],
+      orderBy: 'COALESCE(watched_at, created_at) DESC, created_at DESC',
+    );
+    return rows.map(_movieFromDbMap).toList();
+  }
+
   Future<List<String>> queryMovieIds({
     String searchQuery = '',
     bool watchedOnly = false,

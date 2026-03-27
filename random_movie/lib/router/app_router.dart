@@ -221,6 +221,13 @@ final appRouter = GoRouter(
             GoRoute(
               path: '/history',
               builder: (context, state) => const HistoryPage(),
+              routes: [
+                GoRoute(
+                  path: 'calendar',
+                  parentNavigatorKey: _rootNavigatorKey,
+                  builder: (context, state) => const HistoryCalendarPage(),
+                ),
+              ],
             ),
           ],
         ),

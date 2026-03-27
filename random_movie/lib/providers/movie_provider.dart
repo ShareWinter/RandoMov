@@ -6,6 +6,9 @@ import 'package:flutter/scheduler.dart';
 import 'package:random_movie/models/models.dart';
 import 'package:random_movie/services/services.dart';
 
+/// Library filter mode: all / watched / unwatched.
+enum LibraryFilter { all, watched, unwatched }
+
 class MovieProvider extends ChangeNotifier {
   static const int initialLibraryPageSize = 12;
   static const int warmedLibraryTargetSize = 24;
@@ -16,6 +19,7 @@ class MovieProvider extends ChangeNotifier {
   final MovieScraperService _scraperService = MovieScraperService();
 
   final Map<String, Movie> _movieCache = {};
+  final Map<HistoryMonthKey, HistoryMonthData> _historyCalendarCache = {};
   List<Movie> _libraryMovies = [];
   List<Movie> _historyMovies = [];
   bool _isBusy = false;
@@ -26,10 +30,19 @@ class MovieProvider extends ChangeNotifier {
   int _libraryRefreshRevision = 0;
   bool _isHistoryLoading = false;
   bool _isHistoryLoadingMore = false;
+  bool _isHistoryCalendarLoading = false;
   bool _hasMoreHistory = true;
   int _historyPage = 0;
   bool _hasLoadedLibrary = false;
   bool _hasLoadedHistory = false;
+  bool _hasLoadedHistoryCalendar = false;
+  int _totalCount = 0;
+  int _watchedCount = 0;
+  LibraryFilter _libraryFilter = LibraryFilter.all;
+  HistoryViewMode _historyViewMode = HistoryViewMode.list;
+  HistoryMonthKey _visibleHistoryMonth = HistoryMonthKey.fromDate(
+    DateTime.now(),
+  );
   String? _error;
   String _searchQuery = '';
   Timer? _searchDebounce;
@@ -43,9 +56,19 @@ class MovieProvider extends ChangeNotifier {
   bool get hasMoreLibrary => _hasMoreLibrary;
   bool get isHistoryLoading => _isHistoryLoading;
   bool get isHistoryLoadingMore => _isHistoryLoadingMore;
+  bool get isHistoryCalendarLoading => _isHistoryCalendarLoading;
   bool get hasMoreHistory => _hasMoreHistory;
   bool get hasLoadedLibrary => _hasLoadedLibrary;
   bool get hasLoadedHistory => _hasLoadedHistory;
+  bool get hasLoadedHistoryCalendar => _hasLoadedHistoryCalendar;
+  int get totalCount => _totalCount;
+  int get watchedCount => _watchedCount;
+  int get unwatchedCount => _totalCount - _watchedCount;
+  LibraryFilter get libraryFilter => _libraryFilter;
+  HistoryViewMode get historyViewMode => _historyViewMode;
+  HistoryMonthKey get visibleHistoryMonth => _visibleHistoryMonth;
+  HistoryMonthData? get visibleHistoryMonthData =>
+      _historyCalendarCache[_visibleHistoryMonth];
   String? get error => _error;
   String get searchQuery => _searchQuery;
 
@@ -116,11 +139,22 @@ class MovieProvider extends ChangeNotifier {
     }
 
     try {
-      final movies = await _storageService.queryMovies(
-        limit: limit,
-        offset: 0,
-        searchQuery: _searchQuery,
-      );
+      final watchedOnly = _libraryFilter == LibraryFilter.watched;
+      final unwatchedOnly = _libraryFilter == LibraryFilter.unwatched;
+      final results = await Future.wait<Object>([
+        _storageService.queryMovies(
+          limit: limit,
+          offset: 0,
+          searchQuery: _searchQuery,
+          watchedOnly: watchedOnly,
+          unwatchedOnly: unwatchedOnly,
+        ),
+        _storageService.countMovies(),
+        _storageService.countMovies(watchedOnly: true),
+      ]);
+      final movies = results[0] as List<Movie>;
+      _totalCount = results[1] as int;
+      _watchedCount = results[2] as int;
       _libraryMovies = movies;
       _hasMoreLibrary = movies.length == limit;
       _cacheMovies(movies);
@@ -166,6 +200,8 @@ class MovieProvider extends ChangeNotifier {
         limit: extraLimit,
         offset: currentCount,
         searchQuery: _searchQuery,
+        watchedOnly: _libraryFilter == LibraryFilter.watched,
+        unwatchedOnly: _libraryFilter == LibraryFilter.unwatched,
       );
       if (activeRevision != _libraryRefreshRevision) {
         return;
@@ -203,6 +239,8 @@ class MovieProvider extends ChangeNotifier {
         limit: libraryPageSize,
         offset: _libraryMovies.length,
         searchQuery: _searchQuery,
+        watchedOnly: _libraryFilter == LibraryFilter.watched,
+        unwatchedOnly: _libraryFilter == LibraryFilter.unwatched,
       );
       if (movies.isEmpty) {
         _hasMoreLibrary = false;
@@ -276,6 +314,95 @@ class MovieProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> ensureHistoryCalendarLoaded() async {
+    if (_hasLoadedHistoryCalendar || _isHistoryCalendarLoading) return;
+    await refreshHistoryCalendarMonth();
+  }
+
+  Future<void> refreshHistoryCalendarMonth({
+    HistoryMonthKey? month,
+    bool forceRefresh = false,
+  }) async {
+    final targetMonth = month ?? _visibleHistoryMonth;
+    if (_isHistoryCalendarLoading &&
+        targetMonth == _visibleHistoryMonth &&
+        !forceRefresh) {
+      return;
+    }
+    if (!forceRefresh && _historyCalendarCache.containsKey(targetMonth)) {
+      _hasLoadedHistoryCalendar = true;
+      if (targetMonth == _visibleHistoryMonth) {
+        notifyListeners();
+      }
+      unawaited(_warmHistoryCalendarAdjacentMonths(targetMonth));
+      return;
+    }
+
+    if (targetMonth == _visibleHistoryMonth) {
+      _isHistoryCalendarLoading = true;
+      _error = null;
+      notifyListeners();
+    }
+
+    try {
+      final movies = await _storageService.queryWatchedMoviesByMonth(
+        targetMonth.firstDay,
+      );
+      _historyCalendarCache[targetMonth] = _buildHistoryMonthData(
+        targetMonth,
+        movies,
+      );
+      _hasLoadedHistoryCalendar = true;
+      if (targetMonth == _visibleHistoryMonth) {
+        _error = null;
+      }
+    } catch (error) {
+      if (targetMonth == _visibleHistoryMonth) {
+        _error = '加载观影日历失败: $error';
+      }
+    } finally {
+      if (targetMonth == _visibleHistoryMonth) {
+        _isHistoryCalendarLoading = false;
+        notifyListeners();
+      }
+    }
+
+    unawaited(_warmHistoryCalendarAdjacentMonths(targetMonth));
+  }
+
+  Future<void> setVisibleHistoryMonth(HistoryMonthKey month) async {
+    if (_visibleHistoryMonth == month) return;
+    _visibleHistoryMonth = month;
+    notifyListeners();
+    await refreshHistoryCalendarMonth(month: month);
+  }
+
+  Future<void> jumpToCurrentHistoryMonth() async {
+    final currentMonth = HistoryMonthKey.fromDate(DateTime.now());
+    if (_visibleHistoryMonth != currentMonth) {
+      await setVisibleHistoryMonth(currentMonth);
+      return;
+    }
+
+    if (_historyCalendarCache.containsKey(currentMonth)) {
+      _hasLoadedHistoryCalendar = true;
+      _isHistoryCalendarLoading = false;
+      notifyListeners();
+      return;
+    }
+
+    await refreshHistoryCalendarMonth(month: currentMonth, forceRefresh: true);
+  }
+
+  void setHistoryViewMode(HistoryViewMode mode) {
+    if (_historyViewMode == mode) return;
+    _historyViewMode = mode;
+    notifyListeners();
+    if (mode == HistoryViewMode.calendar) {
+      unawaited(ensureHistoryCalendarLoaded());
+    }
+  }
+
   void setSearchQueryDebounced(String query) {
     _searchQuery = query;
     _searchDebounce?.cancel();
@@ -286,6 +413,13 @@ class MovieProvider extends ChangeNotifier {
   Future<void> setSearchQuery(String query) async {
     _searchQuery = query;
     _searchDebounce?.cancel();
+    await refreshLibrary();
+  }
+
+  /// Switch between all / watched / unwatched filter and reload.
+  Future<void> setLibraryFilter(LibraryFilter filter) async {
+    if (_libraryFilter == filter) return;
+    _libraryFilter = filter;
     await refreshLibrary();
   }
 
@@ -304,8 +438,10 @@ class MovieProvider extends ChangeNotifier {
         limit: libraryLimit,
         offset: 0,
         searchQuery: _searchQuery,
+        watchedOnly: _libraryFilter == LibraryFilter.watched,
+        unwatchedOnly: _libraryFilter == LibraryFilter.unwatched,
       ),
-      _storageService.countMovies(searchQuery: _searchQuery),
+      _storageService.countMovies(),
       _storageService.queryMovies(
         limit: historyLimit,
         offset: 0,
@@ -321,6 +457,8 @@ class MovieProvider extends ChangeNotifier {
 
     _libraryMovies = libraryMovies;
     _historyMovies = historyMovies;
+    _totalCount = libraryCount;
+    _watchedCount = historyCount;
     _historyPage = historyMovies.isEmpty
         ? 0
         : ((historyMovies.length - 1) / historyPageSize).floor();
@@ -359,6 +497,7 @@ class MovieProvider extends ChangeNotifier {
       final savedMovie = await _storageService.addMovie(movie);
       _cacheMovies([savedMovie]);
       await _reloadVisibleCollections();
+      await _refreshVisibleHistoryCalendarIfNeeded();
     } catch (error) {
       _error = '添加失败: $error';
       notifyListeners();
@@ -433,6 +572,7 @@ class MovieProvider extends ChangeNotifier {
       final savedMovie = await _storageService.addMovie(movie);
       _cacheMovies([savedMovie]);
       await _reloadVisibleCollections();
+      await _refreshVisibleHistoryCalendarIfNeeded();
       return savedMovie;
     } on DuplicateMovieException {
       _error = '《${movie.title}》已在片库中';
@@ -468,6 +608,7 @@ class MovieProvider extends ChangeNotifier {
       }
 
       await _reloadVisibleCollections();
+      await _refreshVisibleHistoryCalendarIfNeeded();
       return (added: added, skipped: skipped);
     } finally {
       _isBusy = false;
@@ -482,6 +623,7 @@ class MovieProvider extends ChangeNotifier {
       await _storageService.updateMovie(movie);
       _cacheMovies([movie]);
       await _reloadVisibleCollections();
+      await _refreshVisibleHistoryCalendarIfNeeded();
     } catch (error) {
       _error = '更新失败: $error';
       notifyListeners();
@@ -494,6 +636,7 @@ class MovieProvider extends ChangeNotifier {
       await _storageService.deleteMovie(movieId);
       _movieCache.remove(movieId);
       await _reloadVisibleCollections();
+      await _refreshVisibleHistoryCalendarIfNeeded();
     } catch (error) {
       _error = '删除失败: $error';
       notifyListeners();
@@ -516,6 +659,56 @@ class MovieProvider extends ChangeNotifier {
   void clearError() {
     _error = null;
     notifyListeners();
+  }
+
+  HistoryMonthData _buildHistoryMonthData(
+    HistoryMonthKey month,
+    List<Movie> movies,
+  ) {
+    final grouped = <int, List<Movie>>{};
+    for (final movie in movies) {
+      final watchDate = movie.watchedAt ?? movie.createdAt;
+      grouped.putIfAbsent(watchDate.day, () => <Movie>[]).add(movie);
+    }
+
+    final summaries = <int, HistoryDaySummary>{};
+    for (final entry in grouped.entries) {
+      summaries[entry.key] = HistoryDaySummary(
+        date: DateTime(month.year, month.month, entry.key),
+        movies: List<Movie>.unmodifiable(entry.value),
+      );
+    }
+
+    return HistoryMonthData(
+      month: month,
+      summariesByDay: Map<int, HistoryDaySummary>.unmodifiable(summaries),
+    );
+  }
+
+  Future<void> _warmHistoryCalendarAdjacentMonths(HistoryMonthKey month) async {
+    for (final candidate in [month.previous(), month.next()]) {
+      if (_historyCalendarCache.containsKey(candidate)) continue;
+      try {
+        final movies = await _storageService.queryWatchedMoviesByMonth(
+          candidate.firstDay,
+        );
+        _historyCalendarCache[candidate] = _buildHistoryMonthData(
+          candidate,
+          movies,
+        );
+      } catch (_) {}
+    }
+  }
+
+  void _invalidateHistoryCalendarCache() {
+    _historyCalendarCache.clear();
+    _hasLoadedHistoryCalendar = false;
+  }
+
+  Future<void> _refreshVisibleHistoryCalendarIfNeeded() async {
+    if (!_hasLoadedHistoryCalendar) return;
+    _invalidateHistoryCalendarCache();
+    await refreshHistoryCalendarMonth(forceRefresh: true);
   }
 
   @override
